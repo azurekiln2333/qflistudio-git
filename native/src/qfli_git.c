@@ -777,8 +777,12 @@ static int qg_advance_branch(qg_repo *repo, const git_commit *target, qg_error *
 		git_reference_free(head);
 		rc = git_repository_set_head_detached(repo->repo, git_commit_id(target));
 	} else {
-		snprintf(refname, sizeof(refname), "%s", symbolic);
+		int written = snprintf(refname, sizeof(refname), "%s", symbolic);
+
 		git_reference_free(head);
+		if (written < 0 || (size_t)written >= sizeof(refname))
+			return qg_invalid(err, "reference name is too long");
+
 		rc = git_reference_create(&moved, repo->repo, refname, git_commit_id(target), 1,
 		                          "qg_merge: fast-forward");
 		git_reference_free(moved);
