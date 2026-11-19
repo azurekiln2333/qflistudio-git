@@ -105,7 +105,8 @@ class GitHead {
   /// Full hexadecimal commit id.
   final String oid;
 
-  /// Repository state text, for example `clean` or `merge`.
+  /// Repository state text: `clean` when no operation is in progress,
+  /// `merge` while a merge is open, and other libgit2 state names otherwise.
   final String state;
 
   factory GitHead.fromJson(Object? json) {
