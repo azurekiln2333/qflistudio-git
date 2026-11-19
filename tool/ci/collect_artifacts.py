@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -338,6 +339,10 @@ def main(argv: list[str] | None = None) -> int:
         manifest = collect(args)
     except (ArtifactError, OSError) as error:
         print(f"collect_artifacts: {error}", file=sys.stderr)
+        if os.environ.get("GITHUB_ACTIONS"):
+            # Annotations are public; job logs need admin rights.
+            message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error title=collect_artifacts::{message[:1500]}")
         return 1
     report = summary(manifest)
     print(report, end="")

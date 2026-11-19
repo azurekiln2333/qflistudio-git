@@ -17,6 +17,10 @@ usage() {
 
 fail() {
   printf 'install_ohos_sdk: %s\n' "$1" >&2
+  # Surface the reason as a public annotation; job logs need admin rights.
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf '::error title=install_ohos_sdk::%s\n' "$1"
+  fi
   exit 1
 }
 
@@ -70,8 +74,9 @@ else
   cp -a "$extract/." "$destination/native-package"
 fi
 
-mapfile -t compilers < <(find "$destination/native-package" -type f -path '*/native/llvm/bin/clang' -print)
-((${#compilers[@]} == 1)) || fail 'SDK must contain exactly one native/llvm/bin/clang'
+# The Linux SDK ships clang as a symlink to clang-<major>, so accept links too.
+mapfile -t compilers < <(find "$destination/native-package" \( -type f -o -type l \) -path '*/native/llvm/bin/clang' -print)
+((${#compilers[@]} == 1)) || fail "SDK must contain exactly one native/llvm/bin/clang (found ${#compilers[@]}; Linux packages: ${packages[*]:-none})"
 sdk=$(dirname "$(dirname "$(dirname "$(dirname "${compilers[0]}")")")")
 
 for relative in native/sysroot native/llvm/bin/llvm-strip native/llvm/bin/llvm-readelf native/llvm/bin/llvm-nm; do

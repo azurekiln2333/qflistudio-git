@@ -14,6 +14,10 @@
 #   CMake / Ninja are looked up on PATH.
 #
 set -euo pipefail
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+	# Annotations are public; job logs need admin rights.
+	trap 'echo "::error title=build_native::line $LINENO failed: $BASH_COMMAND"' ERR
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/native/build/src"
@@ -72,6 +76,10 @@ done
 
 die() {
 	echo "error: $*" >&2
+	# Annotations are public; job logs need admin rights.
+	if [ -n "${GITHUB_ACTIONS:-}" ]; then
+		echo "::error title=build_native::$*"
+	fi
 	exit 1
 }
 
