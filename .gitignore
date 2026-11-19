@@ -28,3 +28,6 @@ local.properties
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Lock files differ between flutter_ohos and upstream Flutter.
+pubspec.lock
