@@ -55,12 +55,24 @@ enum MergeOutcome {
 
 /// One entry of [GitRepository.status].
 class GitStatusEntry {
-  const GitStatusEntry({required this.path, required this.status});
+  const GitStatusEntry({
+    required this.path,
+    required this.status,
+    this.statusBits = 0,
+  });
 
   final String path;
 
   /// Status text reported by the native layer, for example `modified`.
+  ///
+  /// It is the highest set bit of [statusBits] as text.
   final String status;
+
+  /// Raw `git_status_t` bit mask of the entry, for example `256`.
+  ///
+  /// Use it to test several states at once, for example
+  /// `entry.statusBits & 256 != 0` for a modified work tree.
+  final int statusBits;
 
   factory GitStatusEntry.fromJson(Object? json) {
     if (json is! Map) {
@@ -71,7 +83,12 @@ class GitStatusEntry {
       throw const FormatException('status entry without a path');
     }
     final status = json['status'];
-    return GitStatusEntry(path: path, status: status is String ? status : '');
+    final bits = json['status_bits'];
+    return GitStatusEntry(
+      path: path,
+      status: status is String ? status : '',
+      statusBits: bits is int ? bits : 0,
+    );
   }
 
   @override
