@@ -1310,6 +1310,8 @@ static const char *qg_state_token(int state)
 		return "apply_mailbox";
 	case GIT_REPOSITORY_STATE_APPLY_MAILBOX_OR_REBASE:
 		return "apply_mailbox_or_rebase";
+	case GIT_REPOSITORY_STATE_NONE:
+		return "clean";
 	default:
 		return "none";
 	}

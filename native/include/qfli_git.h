@@ -90,7 +90,11 @@ QG_API int qg_conflicts_json(qg_repo *repo, char **out_json, qg_error *err); /* 
 QG_API int qg_status_json(qg_repo *repo, char **out_json, qg_error *err);
 /* [{"path": "a.txt", "status": "worktree_modified", "status_bits": 256}, ...] */
 QG_API int qg_head_json(qg_repo *repo, char **out_json, qg_error *err);
-/* {"branch": "main", "oid": "…40 hex…", "state": "none"} */
+/*
+ * {"branch": "main", "oid": "…40 hex…", "state": "clean"}
+ * state is "clean" when no operation is in progress, otherwise the libgit2
+ * repository state name ("merge", "rebase", …).
+ */
 
 QG_API void qg_string_free(char *s);
 
