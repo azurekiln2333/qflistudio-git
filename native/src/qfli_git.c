@@ -930,6 +930,11 @@ int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *em
 		if (rc < 0)
 			return rc;
 
+		/* git_merge wrote MERGE_HEAD; the commit above ends the merge. */
+		rc = git_repository_state_cleanup(repo->repo);
+		if (rc < 0)
+			return qg_error_libgit2(err, rc);
+
 		*out_result = 2;
 		qg_oid_out(out_oid, &oid);
 		return 0;
@@ -979,12 +984,17 @@ int qg_merge_commit(qg_repo *repo, const char *message, const char *name, const 
 
 	memset(&heads, 0, sizeof(heads));
 
+	if (git_repository_state(repo->repo) != GIT_REPOSITORY_STATE_MERGE)
+		return qg_invalid(err, "no merge in progress");
+
 	rc = git_repository_mergehead_foreach(repo->repo, qg_merge_head_cb, &heads);
+	if (rc == GIT_ENOTFOUND)
+		return qg_invalid(err, "no merge in progress");
 	if (rc < 0)
 		return qg_error_libgit2(err, rc);
 
 	if (heads.count == 0)
-		return qg_error_string(err, QG_EINVALID, "no merge in progress");
+		return qg_invalid(err, "no merge in progress");
 
 	if (heads.overflow)
 		return qg_error_string(err, QG_EINVALID, "too many merge heads");
