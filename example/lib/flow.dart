@@ -202,6 +202,10 @@ class FlowRunner {
         _resolveByConcatenation(File(p.join(repo.path, path)));
       }
       await repo.addAll();
+      final unresolved = await repo.conflicts();
+      if (unresolved.isNotEmpty) {
+        throw StateError('unresolved: ${unresolved.join(', ')}');
+      }
       return conflicts.join(', ');
     });
 
