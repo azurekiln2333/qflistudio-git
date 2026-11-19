@@ -212,11 +212,11 @@ jobs:
         run: bash ../tool/ci/run_annotated.sh example-android flutter build apk --debug
 
   example-ios:
-    name: Example iOS simulator build
+    name: Example iOS simulator build and test
     runs-on: macos-15
     needs: ios
     if: ${{ !cancelled() && needs.ios.result == 'success' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -237,6 +237,26 @@ jobs:
       - name: Build example simulator app
         working-directory: example
         run: bash ../tool/ci/run_annotated.sh example-ios flutter build ios --simulator --no-codesign
+      - name: Boot an iOS simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime, items in sorted(devices.items(), reverse=True):
+              if "iOS" not in runtime:
+                  continue
+              for item in items:
+                  if item["name"].startswith("iPhone"):
+                      print(item["udid"])
+                      raise SystemExit
+          raise SystemExit("no iPhone simulator available")
+          ')
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "SIMULATOR_UDID=$udid" >> "$GITHUB_ENV"
+      - name: Run example integration test on the simulator
+        working-directory: example
+        run: bash ../tool/ci/run_annotated.sh example-ios-test flutter test integration_test/flow_test.dart -d "$SIMULATOR_UDID"
 
   release:
     name: Publish release artifacts
