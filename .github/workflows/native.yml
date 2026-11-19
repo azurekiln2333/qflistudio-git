@@ -161,6 +161,19 @@ jobs:
         run: bash tool/build_native.sh --platform ios-device --out native/build/ci/ios/device
       - name: Build simulator framework
         run: bash tool/build_native.sh --platform ios-simulator --out native/build/ci/ios/simulator
+      - name: Check framework bundle metadata
+        run: |
+          # iOS refuses to install an app whose embedded framework lacks these keys.
+          for plist in native/build/ci/ios/device/qfli_git.framework/Info.plist                        native/build/ci/ios/simulator/qfli_git.framework/Info.plist; do
+            for key in CFBundleIdentifier CFBundleExecutable CFBundleVersion MinimumOSVersion; do
+              value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist" 2>/dev/null || true)
+              if [ -z "$value" ]; then
+                echo "::error title=ios-plist::$plist has no $key"
+                exit 1
+              fi
+              echo "$plist $key=$value"
+            done
+          done
       - name: Create xcframework
         run: |
           xcodebuild -create-xcframework \
