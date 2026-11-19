@@ -77,11 +77,18 @@ QG_API int qg_checkout_branch(qg_repo *repo, const char *name, qg_error *err); /
 /*
  * out_result: 0 already up to date, 1 fast-forward, 2 merge commit created,
  * 3 conflicts (index and worktree carry the conflicts, MERGE_HEAD is written).
+ * out_oid receives the merged commit: for 0, 1 and 3 the commit the branch
+ * points at, for 2 the new merge commit.
  */
 QG_API int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *email,
              int *out_result, char out_oid[41], qg_error *err);
+/*
+ * parents are HEAD + MERGE_HEAD. The repository must be in a merge state,
+ * otherwise the function returns QG_EINVALID. At most 8 MERGE_HEAD entries
+ * are supported; more entries return QG_EINVALID.
+ */
 QG_API int qg_merge_commit(qg_repo *repo, const char *message, const char *name, const char *email,
-                    char out_oid[41], qg_error *err); /* parents are HEAD + MERGE_HEAD */
+                    char out_oid[41], qg_error *err);
 
 /*
  * errors out with the current state too.
