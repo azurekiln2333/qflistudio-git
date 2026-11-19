@@ -1212,6 +1212,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 	qg_buffer buffer;
 	size_t count;
 	size_t index;
+	int first = 1;
 	int rc = 0;
 
 	if (repo == NULL || out_json == NULL)
@@ -1250,7 +1251,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 		if (path == NULL)
 			continue;
 
-		if (index > 0 && qg_buffer_append(&buffer, ",") < 0) {
+		if (!first && qg_buffer_append(&buffer, ",") < 0) {
 			rc = qg_error_string(err, -1, "out of memory");
 			goto done;
 		}
@@ -1267,6 +1268,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 			rc = qg_error_string(err, -1, "out of memory");
 			goto done;
 		}
+		first = 0;
 	}
 
 	if (qg_buffer_append(&buffer, "]") < 0) {
