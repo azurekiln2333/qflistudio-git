@@ -77,11 +77,18 @@ QG_API int qg_checkout_branch(qg_repo *repo, const char *name, qg_error *err); /
 /*
  * out_result: 0 already up to date, 1 fast-forward, 2 merge commit created,
  * 3 conflicts (index and worktree carry the conflicts, MERGE_HEAD is written).
+ * out_oid receives the merged commit: for 0, 1 and 3 the commit the branch
+ * points at, for 2 the new merge commit.
  */
 QG_API int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *email,
              int *out_result, char out_oid[41], qg_error *err);
+/*
+ * parents are HEAD + MERGE_HEAD. The repository must be in a merge state,
+ * otherwise the function returns QG_EINVALID. At most 8 MERGE_HEAD entries
+ * are supported; more entries return QG_EINVALID.
+ */
 QG_API int qg_merge_commit(qg_repo *repo, const char *message, const char *name, const char *email,
-                    char out_oid[41], qg_error *err); /* parents are HEAD + MERGE_HEAD */
+                    char out_oid[41], qg_error *err);
 
 /*
  * errors out with the current state too.
@@ -90,7 +97,11 @@ QG_API int qg_conflicts_json(qg_repo *repo, char **out_json, qg_error *err); /* 
 QG_API int qg_status_json(qg_repo *repo, char **out_json, qg_error *err);
 /* [{"path": "a.txt", "status": "worktree_modified", "status_bits": 256}, ...] */
 QG_API int qg_head_json(qg_repo *repo, char **out_json, qg_error *err);
-/* {"branch": "main", "oid": "…40 hex…", "state": "none"} */
+/*
+ * {"branch": "main", "oid": "…40 hex…", "state": "clean"}
+ * state is "clean" when no operation is in progress, otherwise the libgit2
+ * repository state name ("merge", "rebase", …).
+ */
 
 QG_API void qg_string_free(char *s);
 

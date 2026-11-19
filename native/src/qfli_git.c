@@ -229,6 +229,7 @@ static int qg_credentials_cb(git_credential **out, const char *url, const char *
 	const char *username;
 
 	(void)url;
+	(void)username_from_url;
 	(void)allowed_types;
 
 	if (cb == NULL || cb->token == NULL || cb->token[0] == '\0')
@@ -241,13 +242,10 @@ static int qg_credentials_cb(git_credential **out, const char *url, const char *
 	if (qg_canceled(cb->cancel_flag))
 		return GIT_EUSER;
 
+	/* The URL may carry a user name; the contract says to ignore it. */
 	username = cb->username;
-	if (username == NULL || username[0] == '\0') {
-		if (username_from_url != NULL && username_from_url[0] != '\0')
-			username = username_from_url;
-		else
-			username = "git";
-	}
+	if (username == NULL || username[0] == '\0')
+		username = "git";
 
 	return git_credential_userpass_plaintext_new(out, username, cb->token);
 }
@@ -779,8 +777,12 @@ static int qg_advance_branch(qg_repo *repo, const git_commit *target, qg_error *
 		git_reference_free(head);
 		rc = git_repository_set_head_detached(repo->repo, git_commit_id(target));
 	} else {
-		snprintf(refname, sizeof(refname), "%s", symbolic);
+		int written = snprintf(refname, sizeof(refname), "%s", symbolic);
+
 		git_reference_free(head);
+		if (written < 0 || (size_t)written >= sizeof(refname))
+			return qg_invalid(err, "reference name is too long");
+
 		rc = git_reference_create(&moved, repo->repo, refname, git_commit_id(target), 1,
 		                          "qg_merge: fast-forward");
 		git_reference_free(moved);
@@ -906,14 +908,19 @@ int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *em
 		git_commit *commit = NULL;
 		git_oid oid;
 		char message[512];
+		int written;
+
+		written = snprintf(message, sizeof(message), "Merge branch '%s'", branch);
+		if (written < 0 || (size_t)written >= sizeof(message)) {
+			git_annotated_commit_free(theirs);
+			return qg_invalid(err, "branch name is too long");
+		}
 
 		rc = git_commit_lookup(&commit, repo->repo, target_id);
 		if (rc < 0) {
 			git_annotated_commit_free(theirs);
 			return qg_error_libgit2(err, rc);
 		}
-
-		snprintf(message, sizeof(message), "Merge branch '%s'", branch);
 
 		rc = qg_write_commit(repo, message, name != NULL ? name : "qfli_git",
 		                     email != NULL ? email : "qfli_git@localhost", commit, &oid, err);
@@ -922,6 +929,11 @@ int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *em
 
 		if (rc < 0)
 			return rc;
+
+		/* git_merge wrote MERGE_HEAD; the commit above ends the merge. */
+		rc = git_repository_state_cleanup(repo->repo);
+		if (rc < 0)
+			return qg_error_libgit2(err, rc);
 
 		*out_result = 2;
 		qg_oid_out(out_oid, &oid);
@@ -972,12 +984,17 @@ int qg_merge_commit(qg_repo *repo, const char *message, const char *name, const 
 
 	memset(&heads, 0, sizeof(heads));
 
+	if (git_repository_state(repo->repo) != GIT_REPOSITORY_STATE_MERGE)
+		return qg_invalid(err, "no merge in progress");
+
 	rc = git_repository_mergehead_foreach(repo->repo, qg_merge_head_cb, &heads);
+	if (rc == GIT_ENOTFOUND)
+		return qg_invalid(err, "no merge in progress");
 	if (rc < 0)
 		return qg_error_libgit2(err, rc);
 
 	if (heads.count == 0)
-		return qg_error_string(err, QG_EINVALID, "no merge in progress");
+		return qg_invalid(err, "no merge in progress");
 
 	if (heads.overflow)
 		return qg_error_string(err, QG_EINVALID, "too many merge heads");
@@ -1120,10 +1137,14 @@ int qg_conflicts_json(qg_repo *repo, char **out_json, qg_error *err)
 		if (duplicate)
 			continue;
 
-		seen = realloc(seen, sizeof(char *) * (seen_count + 1));
-		if (seen == NULL) {
-			rc = qg_error_string(err, -1, "out of memory");
-			goto done;
+		{
+			char **grown = realloc(seen, sizeof(char *) * (seen_count + 1));
+
+			if (grown == NULL) {
+				rc = qg_error_string(err, -1, "out of memory");
+				goto done;
+			}
+			seen = grown;
 		}
 		seen[seen_count++] = (char *)path;
 
@@ -1191,6 +1212,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 	qg_buffer buffer;
 	size_t count;
 	size_t index;
+	int first = 1;
 	int rc = 0;
 
 	if (repo == NULL || out_json == NULL)
@@ -1229,7 +1251,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 		if (path == NULL)
 			continue;
 
-		if (index > 0 && qg_buffer_append(&buffer, ",") < 0) {
+		if (!first && qg_buffer_append(&buffer, ",") < 0) {
 			rc = qg_error_string(err, -1, "out of memory");
 			goto done;
 		}
@@ -1246,6 +1268,7 @@ int qg_status_json(qg_repo *repo, char **out_json, qg_error *err)
 			rc = qg_error_string(err, -1, "out of memory");
 			goto done;
 		}
+		first = 0;
 	}
 
 	if (qg_buffer_append(&buffer, "]") < 0) {
@@ -1287,6 +1310,8 @@ static const char *qg_state_token(int state)
 		return "apply_mailbox";
 	case GIT_REPOSITORY_STATE_APPLY_MAILBOX_OR_REBASE:
 		return "apply_mailbox_or_rebase";
+	case GIT_REPOSITORY_STATE_NONE:
+		return "clean";
 	default:
 		return "none";
 	}
