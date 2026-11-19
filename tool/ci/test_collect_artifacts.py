@@ -137,6 +137,12 @@ class VersionTests(unittest.TestCase):
             )
             self.assertEqual(collect.load_upstream_versions(path), {"libgit2": "1.9.7"})
 
+    def test_repository_file(self) -> None:
+        path = Path(__file__).resolve().parents[2] / "third_party" / "versions.json"
+        versions = collect.load_upstream_versions(path)
+        self.assertEqual(set(versions), {"libgit2", "mbedtls", "cacert"})
+        self.assertNotIn("unknown", versions.values())
+
     def test_missing_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             with self.assertRaises(collect.ArtifactError):

@@ -130,6 +130,11 @@ def load_upstream_versions(path: Path) -> dict:
     except json.JSONDecodeError as error:
         raise ArtifactError(f"Cannot parse {path}: {error}") from error
     versions = {}
+    if isinstance(data, dict) and (
+        isinstance(data.get("sources"), list) or isinstance(data.get("assets"), list)
+    ):
+        # Schema written for tool/fetch_sources.py: {"sources": [...], "assets": [...]}.
+        data = list(data.get("sources") or []) + list(data.get("assets") or [])
     entries = data.items() if isinstance(data, dict) else (
         (entry.get("name"), entry) for entry in data
     )
