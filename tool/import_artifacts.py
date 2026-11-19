@@ -85,7 +85,7 @@ def is_payload(platform: str, record: dict) -> bool:
     """Return True for the file records that belong in a plugin platform folder."""
     relative = safe_relative(record["path"])
     if platform in ("android", "ohos"):
-        return relative.name.startswith("lib") and relative.suffix == ".so"
+        return relative.name == LIBRARY_NAME
     if platform == "ios":
         return relative.parts[0] == FRAMEWORK_NAME
     return False

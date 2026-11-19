@@ -288,6 +288,26 @@ class ImportTests(unittest.TestCase):
             )
             self.assertFalse((root / "ohos/libs").exists())
 
+    def test_other_shared_libraries_are_not_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "android",
+                [
+                    ("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF arm64"),
+                    ("arm64-v8a/libc++_shared.so", "arm64-v8a", b"\x7fELF shim"),
+                ],
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                0,
+            )
+            jni = root / "android/src/main/jniLibs/arm64-v8a"
+            self.assertEqual(sorted(child.name for child in jni.iterdir()), ["libqfli_git.so"])
+
     def test_missing_manifest_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             with self.assertRaises(import_module.ArtifactError):
