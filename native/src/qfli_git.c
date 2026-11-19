@@ -908,14 +908,19 @@ int qg_merge(qg_repo *repo, const char *branch, const char *name, const char *em
 		git_commit *commit = NULL;
 		git_oid oid;
 		char message[512];
+		int written;
+
+		written = snprintf(message, sizeof(message), "Merge branch '%s'", branch);
+		if (written < 0 || (size_t)written >= sizeof(message)) {
+			git_annotated_commit_free(theirs);
+			return qg_invalid(err, "branch name is too long");
+		}
 
 		rc = git_commit_lookup(&commit, repo->repo, target_id);
 		if (rc < 0) {
 			git_annotated_commit_free(theirs);
 			return qg_error_libgit2(err, rc);
 		}
-
-		snprintf(message, sizeof(message), "Merge branch '%s'", branch);
 
 		rc = qg_write_commit(repo, message, name != NULL ? name : "qfli_git",
 		                     email != NULL ? email : "qfli_git@localhost", commit, &oid, err);
