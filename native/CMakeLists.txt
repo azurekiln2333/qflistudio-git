@@ -137,6 +137,8 @@ set_target_properties(qfli_git PROPERTIES
 	PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/qfli_git.h")
 
 if(QFLI_GIT_PLATFORM MATCHES "^ios")
+	# iOS refuses to install an app whose embedded framework has no
+	# CFBundleIdentifier, and App Store validation also wants MinimumOSVersion.
 	set_target_properties(qfli_git PROPERTIES
 		PREFIX ""
 		FRAMEWORK TRUE
@@ -144,7 +146,11 @@ if(QFLI_GIT_PLATFORM MATCHES "^ios")
 		VERSION "${PROJECT_VERSION}"
 		SOVERSION "1"
 		INSTALL_NAME_DIR "@rpath"
-		MACOSX_RPATH TRUE)
+		MACOSX_RPATH TRUE
+		MACOSX_FRAMEWORK_IDENTIFIER "com.azurekiln.qfli-git"
+		MACOSX_FRAMEWORK_BUNDLE_VERSION "${PROJECT_VERSION}"
+		MACOSX_FRAMEWORK_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+		MACOSX_FRAMEWORK_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in")
 endif()
 
 if(APPLE)
