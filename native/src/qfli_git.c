@@ -229,6 +229,7 @@ static int qg_credentials_cb(git_credential **out, const char *url, const char *
 	const char *username;
 
 	(void)url;
+	(void)username_from_url;
 	(void)allowed_types;
 
 	if (cb == NULL || cb->token == NULL || cb->token[0] == '\0')
@@ -241,13 +242,10 @@ static int qg_credentials_cb(git_credential **out, const char *url, const char *
 	if (qg_canceled(cb->cancel_flag))
 		return GIT_EUSER;
 
+	/* The URL may carry a user name; the contract says to ignore it. */
 	username = cb->username;
-	if (username == NULL || username[0] == '\0') {
-		if (username_from_url != NULL && username_from_url[0] != '\0')
-			username = username_from_url;
-		else
-			username = "git";
-	}
+	if (username == NULL || username[0] == '\0')
+		username = "git";
 
 	return git_credential_userpass_plaintext_new(out, username, cb->token);
 }
