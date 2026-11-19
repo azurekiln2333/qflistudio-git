@@ -1137,10 +1137,14 @@ int qg_conflicts_json(qg_repo *repo, char **out_json, qg_error *err)
 		if (duplicate)
 			continue;
 
-		seen = realloc(seen, sizeof(char *) * (seen_count + 1));
-		if (seen == NULL) {
-			rc = qg_error_string(err, -1, "out of memory");
-			goto done;
+		{
+			char **grown = realloc(seen, sizeof(char *) * (seen_count + 1));
+
+			if (grown == NULL) {
+				rc = qg_error_string(err, -1, "out of memory");
+				goto done;
+			}
+			seen = grown;
 		}
 		seen[seen_count++] = (char *)path;
 
