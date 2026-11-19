@@ -46,17 +46,8 @@ jobs:
         run: python3 tool/fetch_sources.py
       - name: Build host library
         run: bash tool/build_native.sh --platform host --out native/build/ci/host
-      - name: Build smoke test
-        run: |
-          cc -O2 -Wall -Wextra native/test/smoke.c \
-            -o native/build/ci/host/smoke \
-            -Inative/include \
-            -Lnative/build/ci/host \
-            -lqfli_git \
-            -Wl,-rpath,'$ORIGIN' \
-            -lpthread -ldl -lm
       - name: Run smoke test
-        run: ./native/build/ci/host/smoke
+        run: ./native/build/ci/host/qfli_git_smoke
 
   android:
     name: Android (3 ABIs)
