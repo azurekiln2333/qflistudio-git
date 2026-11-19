@@ -62,6 +62,7 @@ class ImportTests(unittest.TestCase):
                     ("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF arm64"),
                     ("armeabi-v7a/libqfli_git.so", "armeabi-v7a", b"\x7fELF v7a"),
                     ("x86_64/libqfli_git.so", "x86_64", b"\x7fELF x86_64"),
+                    ("licenses/PROJECT-LICENSE", None, b"GPL-3.0-or-later\n"),
                 ],
             )
             code = import_module.main(
@@ -70,6 +71,7 @@ class ImportTests(unittest.TestCase):
             self.assertEqual(code, 0)
             copied = root / "android/src/main/jniLibs/arm64-v8a/libqfli_git.so"
             self.assertEqual(copied.read_bytes(), b"\x7fELF arm64")
+            self.assertFalse((root / "android/src/main/jniLibs/licenses").exists())
             lock = json.loads((root / "native_libs.lock.json").read_text(encoding="utf-8"))
             self.assertEqual(lock["source"]["commits"]["android"], COMMIT)
             paths = {entry["path"] for entry in lock["files"]}
@@ -126,6 +128,7 @@ class ImportTests(unittest.TestCase):
                         None,
                         b"\xcf\xfa\xed\xfe device",
                     ),
+                    ("licenses/PROJECT-LICENSE", None, b"GPL-3.0-or-later\n"),
                 ],
             )
             self.assertEqual(

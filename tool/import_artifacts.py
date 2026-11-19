@@ -77,22 +77,30 @@ def verify_manifest(artifact: Path, manifest: dict) -> list[dict]:
     return verified
 
 
+def is_payload(platform: str, record: dict) -> bool:
+    """Return True for the file records that belong in a plugin platform folder."""
+    relative = safe_relative(record["path"])
+    if platform in ("android", "ohos"):
+        return relative.name.startswith("lib") and relative.suffix == ".so"
+    if platform == "ios":
+        return relative.parts[0] == FRAMEWORK_NAME
+    return False
+
+
 def destination_for(platform: str, repo_root: Path, record: dict) -> Path:
     """Map one manifest record to its final path inside the plugin."""
     relative = safe_relative(record["path"])
     if platform == "android":
         abi = record.get("abi")
-        if not abi or not relative.name.startswith("lib") or relative.suffix != ".so":
-            raise ArtifactError(f"Android artifact must be lib*.so with an abi: {relative}")
+        if not abi:
+            raise ArtifactError(f"Android artifact needs an abi: {relative}")
         return repo_root / "android/src/main/jniLibs" / abi / relative.name
     if platform == "ohos":
         abi = record.get("abi")
-        if not abi or not relative.name.startswith("lib") or relative.suffix != ".so":
-            raise ArtifactError(f"OHOS artifact must be lib*.so with an abi: {relative}")
+        if not abi:
+            raise ArtifactError(f"OHOS artifact needs an abi: {relative}")
         return repo_root / "ohos/libs" / abi / relative.name
     if platform == "ios":
-        if relative.parts[0] != FRAMEWORK_NAME:
-            raise ArtifactError(f"iOS artifact must contain {FRAMEWORK_NAME}: {relative}")
         return repo_root / "ios/Frameworks" / relative
     raise ArtifactError(f"Unsupported platform: {platform}")
 
@@ -106,9 +114,12 @@ def import_artifact(artifact: Path, repo_root: Path, commit_filter: str | None =
             f"Artifact commit {manifest['commit']} does not match expected {commit_filter}"
         )
     verified = verify_manifest(artifact, manifest)
+    payload = [record for record in verified if is_payload(platform, record)]
+    if not payload:
+        raise ArtifactError(f"No library payload in {artifact} for {platform}")
     targets = [
         (artifact, record, destination_for(platform, repo_root, record))
-        for record in verified
+        for record in payload
     ]
     if platform == "ios":
         # Replace the previous xcframework as a unit so stale slices never linger.
