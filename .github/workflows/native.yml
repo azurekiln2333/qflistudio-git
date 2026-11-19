@@ -214,7 +214,7 @@ jobs:
         run: python3 tool/import_artifacts.py --artifact native/build/ci/artifacts/android
       - name: Build example APK
         working-directory: example
-        run: flutter build apk --debug
+        run: bash ../tool/ci/run_annotated.sh example-android flutter build apk --debug
 
   example-ios:
     name: Example iOS simulator build
@@ -240,7 +240,7 @@ jobs:
         run: python3 tool/import_artifacts.py --artifact native/build/ci/artifacts/ios
       - name: Build example simulator app
         working-directory: example
-        run: flutter build ios --simulator --no-codesign
+        run: bash ../tool/ci/run_annotated.sh example-ios flutter build ios --simulator --no-codesign
 
   release:
     name: Publish release artifacts
