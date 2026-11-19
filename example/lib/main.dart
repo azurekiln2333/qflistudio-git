@@ -79,10 +79,14 @@ class _FlowPageState extends State<FlowPage> {
   }
 
   Future<void> _runFlow() async {
-    final remoteUrl = _remoteController.text.trim();
-    if (remoteUrl.isEmpty) {
+    final typedUrl = _remoteController.text.trim();
+    if (typedUrl.isEmpty) {
       _showMessage('Enter a remote URL.');
       return;
+    }
+    final remoteUrl = sanitizeRemoteUrl(typedUrl);
+    if (remoteUrl != typedUrl) {
+      _showMessage('Put the token in the Token field. The URL was cleaned.');
     }
     final settings = FlowSettings(
       remoteUrl: remoteUrl,
@@ -256,7 +260,9 @@ class _FlowPageState extends State<FlowPage> {
   }
 
   Widget _stepRow(ThemeData theme, FlowStep step) {
-    final color = step.succeeded ? Colors.green.shade700 : theme.colorScheme.error;
+    final color = step.succeeded
+        ? Colors.green.shade700
+        : theme.colorScheme.error;
     final text = step.succeeded ? step.detail : step.error;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),

@@ -3,6 +3,28 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:qfli_git/qfli_git.dart';
 
+/// Removes any userinfo from [url].
+///
+/// libgit2 writes the remote URL into `.git/config`, so a token embedded in the
+/// URL would reach the disk. Credentials belong in the Token field.
+String sanitizeRemoteUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.userInfo.isEmpty) {
+    return url;
+  }
+  return uri.replace(userInfo: '').toString();
+}
+
+/// Returns `host/path` for [url], so a step detail never shows userinfo.
+String displayRemoteUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) {
+    return url;
+  }
+  final path = uri.path.startsWith('/') ? uri.path : '/${uri.path}';
+  return '${uri.host}$path';
+}
+
 /// One finished step of [FlowRunner.run].
 class FlowStep {
   const FlowStep({
@@ -75,6 +97,7 @@ class FlowRunner {
   final FlowSettings settings;
 
   /// Directory that receives the clone. Its content is replaced on every run.
+  /// The previous clone is renamed to `<workPath>.previous` first.
   final String workPath;
 
   final void Function(FlowStep step) onStep;
@@ -95,19 +118,20 @@ class FlowRunner {
     repoDir.createSync(recursive: true);
 
     final author = settings.author;
+    final cloneUrl = sanitizeRemoteUrl(settings.remoteUrl);
     late final GitRepository repo;
     late final String defaultBranch;
 
     await _step('clone', () async {
       repo = await GitRepository.clone(
-        url: settings.remoteUrl,
+        url: cloneUrl,
         path: workPath,
         username: settings.username,
         token: settings.token,
         cancel: cancel,
       );
       defaultBranch = (await repo.head()).branch ?? settings.branch;
-      return settings.remoteUrl;
+      return displayRemoteUrl(cloneUrl);
     });
 
     await _step('write base file', () async {
