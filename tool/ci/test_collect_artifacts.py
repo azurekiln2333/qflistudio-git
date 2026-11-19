@@ -100,6 +100,12 @@ class ExportTests(unittest.TestCase):
             collect.parse_defined_symbols(output), ["qg_add_all", "qg_clone", "qg_commit"]
         )
 
+    def test_version_node_symbols_are_ignored(self) -> None:
+        output = NM_EXPORTS + "0000000000000000 A QFLI_GIT_1.0\n"
+        self.assertEqual(
+            collect.parse_defined_symbols(output), ["qg_add_all", "qg_clone", "qg_commit"]
+        )
+
     def test_no_export_fails(self) -> None:
         with self.assertRaises(collect.ArtifactError):
             collect.check_exports([])

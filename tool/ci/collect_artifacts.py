@@ -83,6 +83,9 @@ def parse_defined_symbols(nm_output: str) -> list[str]:
         name = fields[-1]
         if name.startswith("_"):
             continue
+        # Absolute entries hold the version node names of a named version script.
+        if len(fields) >= 3 and len(fields[-2]) == 1 and fields[-2] == "A":
+            continue
         symbols.append(name)
     return symbols
 
