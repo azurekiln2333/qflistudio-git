@@ -35,4 +35,19 @@ void main() {
       expect(text, isNot(contains('token')));
     });
   });
+  group('FlowStep', () {
+    test('a cancelled step is not a failure', () {
+      const step = FlowStep(
+        name: 'clone',
+        succeeded: false,
+        cancelled: true,
+        elapsed: Duration(milliseconds: 5),
+      );
+
+      expect(step.cancelled, isTrue);
+      expect(step.error, isNull);
+      expect(step.toString(), contains('cancelled'));
+      expect(step.toString(), isNot(contains('failed')));
+    });
+  });
 }

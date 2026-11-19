@@ -31,6 +31,7 @@ class FlowStep {
     required this.name,
     required this.succeeded,
     required this.elapsed,
+    this.cancelled = false,
     this.detail,
     this.error,
   });
@@ -40,6 +41,10 @@ class FlowStep {
 
   /// Whether the step finished without an exception.
   final bool succeeded;
+
+  /// Whether the cancel button stopped the step. A cancelled step is a normal
+  /// ending, not a failure.
+  final bool cancelled;
 
   /// Wall clock time spent in the step.
   final Duration elapsed;
@@ -52,7 +57,11 @@ class FlowStep {
 
   @override
   String toString() {
-    final state = succeeded ? 'ok' : 'failed';
+    final state = cancelled
+        ? 'cancelled'
+        : succeeded
+        ? 'ok'
+        : 'failed';
     final text = detail ?? error ?? '';
     return '$name: $state (${elapsed.inMilliseconds} ms) $text';
   }
@@ -226,12 +235,14 @@ class FlowRunner {
         ),
       );
     } catch (error) {
+      final cancelled = error is GitException && error.isCanceled;
       onStep(
         FlowStep(
           name: name,
           succeeded: false,
+          cancelled: cancelled,
           elapsed: watch.elapsed,
-          error: _describe(error),
+          error: cancelled ? null : _describe(error),
         ),
       );
       rethrow;
