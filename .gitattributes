@@ -10,3 +10,7 @@
 
 # Shell scripts run on Linux and macOS CI runners.
 *.sh text eol=lf
+
+# Prebuilt native libraries imported from CI releases.
+*.so binary
+ios/Frameworks/qfli_git.xcframework/**/qfli_git binary
