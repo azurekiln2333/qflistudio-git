@@ -122,7 +122,12 @@ class FlowRunner {
   Future<void> run() async {
     final repoDir = Directory(workPath);
     if (repoDir.existsSync()) {
-      repoDir.deleteSync(recursive: true);
+      // Keep the last run for inspection instead of deleting the failure site.
+      final previous = Directory('$workPath.previous');
+      if (previous.existsSync()) {
+        previous.deleteSync(recursive: true);
+      }
+      repoDir.renameSync(previous.path);
     }
     repoDir.createSync(recursive: true);
 
