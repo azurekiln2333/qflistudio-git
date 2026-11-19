@@ -334,9 +334,11 @@ class QfliGit {
 
   static void _initNative(String caFile) {
     final bindings = QfliGitBindings(openQfliGitLibrary());
-    final error = calloc<QgError>();
-    final caFilePointer = caFile.toNativeUtf8();
+    Pointer<QgError> error = nullptr;
+    Pointer<Utf8> caFilePointer = nullptr;
     try {
+      error = calloc<QgError>();
+      caFilePointer = caFile.toNativeUtf8();
       final code = bindings.init(caFilePointer, error);
       if (code != 0) {
         throw GitException.fromNative(NativeError.read(error, code));
@@ -348,8 +350,12 @@ class QfliGit {
         );
       }
     } finally {
-      malloc.free(caFilePointer);
-      calloc.free(error);
+      if (caFilePointer != nullptr) {
+        malloc.free(caFilePointer);
+      }
+      if (error != nullptr) {
+        calloc.free(error);
+      }
     }
   }
 }
@@ -429,9 +435,11 @@ class GitRepository {
     final caFile = QfliGit.caFile;
     return Isolate.run(() {
       final bindings = QfliGitBindings(openQfliGitLibrary());
-      final error = calloc<QgError>();
-      final out = calloc<Pointer<QgRepo>>();
+      Pointer<QgError> error = nullptr;
+      Pointer<Pointer<QgRepo>> out = nullptr;
       try {
+        error = calloc<QgError>();
+        out = calloc<Pointer<QgRepo>>();
         _initIfNeeded(bindings, caFile, error);
         return _withUtf8([target], (values) {
           final code = bindings.repoInit(values[0], bare ? 1 : 0, out, error);
@@ -450,8 +458,12 @@ class GitRepository {
           return GitRepository._(target);
         });
       } finally {
-        calloc.free(out);
-        calloc.free(error);
+        if (out != nullptr) {
+          calloc.free(out);
+        }
+        if (error != nullptr) {
+          calloc.free(error);
+        }
       }
     });
   }
@@ -760,10 +772,13 @@ T _withRepo<T>(
   T Function(_Session session) body,
 ) {
   final bindings = QfliGitBindings(openQfliGitLibrary());
-  final error = calloc<QgError>();
-  final out = calloc<Pointer<QgRepo>>();
-  final pathPointer = repoPath.toNativeUtf8();
+  Pointer<QgError> error = nullptr;
+  Pointer<Pointer<QgRepo>> out = nullptr;
+  Pointer<Utf8> pathPointer = nullptr;
   try {
+    error = calloc<QgError>();
+    out = calloc<Pointer<QgRepo>>();
+    pathPointer = repoPath.toNativeUtf8();
     _initIfNeeded(bindings, caFile, error);
     final code = bindings.repoOpen(pathPointer, out, error);
     if (code != 0) {
@@ -783,9 +798,15 @@ T _withRepo<T>(
       bindings.repoFree(repo);
     }
   } finally {
-    malloc.free(pathPointer);
-    calloc.free(out);
-    calloc.free(error);
+    if (pathPointer != nullptr) {
+      malloc.free(pathPointer);
+    }
+    if (out != nullptr) {
+      calloc.free(out);
+    }
+    if (error != nullptr) {
+      calloc.free(error);
+    }
   }
 }
 
