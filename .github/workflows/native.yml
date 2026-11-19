@@ -21,6 +21,9 @@ env:
   OHOS_SDK_URL: 'https://repo.huaweicloud.com/openharmony/os/5.0.0-Release/ohos-sdk-windows_linux-public.tar.gz'
   OHOS_SDK_SHA256: 'f06a2a8ae38a3cf01c583557f5a4bb1e6e3626df975599aa71f4a59e9af70ecc'
   FLUTTER_CHANNEL: stable
+  # Match the upstream base of flutter_ohos (Dart 3.11, Gradle 8.14 templates).
+  # Newer stable releases reject the Gradle version flutter_ohos generates.
+  FLUTTER_VERSION: '3.41.x'
 
 jobs:
   host-smoke:
@@ -206,6 +209,7 @@ jobs:
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: qfli-git-android-${{ github.sha }}
@@ -232,6 +236,7 @@ jobs:
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: qfli-git-ios-${{ github.sha }}
