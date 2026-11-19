@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -201,6 +202,111 @@ class ImportTests(unittest.TestCase):
                 import_module.verify_manifest(
                     artifact, import_module.load_manifest(artifact)
                 )
+
+    def test_release_zip_with_wrapper_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            staging = Path(work) / "staging"
+            inside = staging / "qfli-git-ohos-abc123"
+            write_manifest(
+                inside,
+                "ohos",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+            )
+            archive = Path(work) / "ohos.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                for source in sorted(inside.rglob("*")):
+                    if source.is_file():
+                        bundle.write(source, source.relative_to(staging).as_posix())
+            extracted = Path(work) / "extracted"
+            import_module.extract_zip(archive, extracted)
+            found = import_module.artifact_root(extracted)
+            self.assertEqual(found, extracted / "qfli-git-ohos-abc123")
+            self.assertEqual(
+                import_module.main(["--artifact", str(found), "--repo-root", str(root)]),
+                0,
+            )
+            self.assertTrue((root / "ohos/libs/arm64-v8a/libqfli_git.so").is_file())
+
+    def test_artifact_root_rejects_two_wrapper_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            extracted = Path(work)
+            for name in ("first", "second"):
+                write_manifest(
+                    extracted / name,
+                    "ohos",
+                    [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+                )
+            with self.assertRaises(import_module.ArtifactError):
+                import_module.artifact_root(extracted)
+
+    def test_abi_traversal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "android",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF arm64")],
+            )
+            manifest = json.loads(
+                (artifact / "manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["files"][0]["abi"] = "../../../escaped"
+            (artifact / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                1,
+            )
+            self.assertFalse((root / "android/escaped").exists())
+            self.assertFalse((root / "native_libs.lock.json").exists())
+
+    def test_unknown_abi_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "ohos",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+            )
+            manifest = json.loads(
+                (artifact / "manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["files"][0]["abi"] = "armeabi-v7a"
+            (artifact / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                1,
+            )
+            self.assertFalse((root / "ohos/libs").exists())
+
+    def test_other_shared_libraries_are_not_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "android",
+                [
+                    ("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF arm64"),
+                    ("arm64-v8a/libc++_shared.so", "arm64-v8a", b"\x7fELF shim"),
+                ],
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                0,
+            )
+            jni = root / "android/src/main/jniLibs/arm64-v8a"
+            self.assertEqual(sorted(child.name for child in jni.iterdir()), ["libqfli_git.so"])
 
     def test_missing_manifest_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:

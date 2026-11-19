@@ -18,6 +18,10 @@ RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/tags"
 LIBRARY_NAME = "libqfli_git.so"
 FRAMEWORK_NAME = "qfli_git.xcframework"
 PLATFORM_ORDER = ("android", "ohos", "ios")
+PLATFORM_ABIS = {
+    "android": ("arm64-v8a", "armeabi-v7a", "x86_64"),
+    "ohos": ("arm64-v8a", "x86_64"),
+}
 
 
 class ArtifactError(RuntimeError):
@@ -81,24 +85,30 @@ def is_payload(platform: str, record: dict) -> bool:
     """Return True for the file records that belong in a plugin platform folder."""
     relative = safe_relative(record["path"])
     if platform in ("android", "ohos"):
-        return relative.name.startswith("lib") and relative.suffix == ".so"
+        return relative.name == LIBRARY_NAME
     if platform == "ios":
         return relative.parts[0] == FRAMEWORK_NAME
     return False
+
+
+def safe_abi(platform: str, record: dict, relative: PurePosixPath) -> str:
+    """Return a whitelisted abi from a manifest record."""
+    abi = record.get("abi")
+    if not abi:
+        raise ArtifactError(f"{platform} artifact needs an abi: {relative}")
+    if abi not in PLATFORM_ABIS[platform]:
+        raise ArtifactError(f"{platform} manifest has an unknown abi: {abi!r}")
+    return abi
 
 
 def destination_for(platform: str, repo_root: Path, record: dict) -> Path:
     """Map one manifest record to its final path inside the plugin."""
     relative = safe_relative(record["path"])
     if platform == "android":
-        abi = record.get("abi")
-        if not abi:
-            raise ArtifactError(f"Android artifact needs an abi: {relative}")
+        abi = safe_abi(platform, record, relative)
         return repo_root / "android/src/main/jniLibs" / abi / relative.name
     if platform == "ohos":
-        abi = record.get("abi")
-        if not abi:
-            raise ArtifactError(f"OHOS artifact needs an abi: {relative}")
+        abi = safe_abi(platform, record, relative)
         return repo_root / "ohos/libs" / abi / relative.name
     if platform == "ios":
         return repo_root / "ios/Frameworks" / relative
@@ -186,6 +196,20 @@ def extract_zip(archive: Path, destination: Path) -> None:
         bundle.extractall(destination)
 
 
+def artifact_root(extracted: Path) -> Path:
+    """Return the directory holding manifest.json, allowing one wrapper directory."""
+    if (extracted / "manifest.json").is_file():
+        return extracted
+    candidates = sorted(
+        child
+        for child in extracted.iterdir()
+        if child.is_dir() and (child / "manifest.json").is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    raise ArtifactError(f"Missing manifest.json in {extracted}")
+
+
 def import_release(tag: str, repo_root: Path, platforms: list[str], token: str | None) -> list[dict]:
     results = []
     with tempfile.TemporaryDirectory(prefix="qfli-git-release-") as work:
@@ -196,7 +220,7 @@ def import_release(tag: str, repo_root: Path, platforms: list[str], token: str |
             extracted = workdir / platform
             extracted.mkdir()
             extract_zip(archive, extracted)
-            results.append(import_artifact(extracted, repo_root))
+            results.append(import_artifact(artifact_root(extracted), repo_root))
     return results
 
 

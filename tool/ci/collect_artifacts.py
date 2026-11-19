@@ -202,8 +202,9 @@ def collect_licenses(
                 break
     licenses_dir = repo_root / "third_party/licenses"
     if licenses_dir.is_dir():
+        chosen = set(selected.values())
         for source in sorted(licenses_dir.iterdir()):
-            if source.is_file() and source.name not in selected:
+            if source.is_file() and source not in chosen:
                 selected[f"UPSTREAM-{source.name}"] = source
     for name, source in sorted(selected.items()):
         relative = f"licenses/{name}"
