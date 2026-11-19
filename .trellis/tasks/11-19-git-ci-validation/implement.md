@@ -80,3 +80,17 @@
 ## 集成记录
 
 （大脑填写各 Pi 合入的提交 SHA。）
+
+- 第一轮合入：`605ee31`（A）、`8331a9d`（C）、`63594f6`（B）、`7c7f4be`（D）。
+- 第二轮修复合入：`dc7c2e7`（A）、`fdd8a78`（C）、`a1c6a69`（B）、`b6e94f9`（D）。
+- 发布：`native-v0.1.1`（`85406ec`）。预编译库导入：`95cb99b`。插件标签：`v0.1.0`（`95cb99b`）。
+- `native-v0.1.0` 的 Release 任务失败（`gh` 缺少仓库名），已由 `native-v0.1.1` 取代。
+
+## 验证方式变更（2026-11-19）
+
+用户要求不在本机运行测试、模拟器、虚拟机和 WSL。之后的验证全部走 GitHub Actions：
+
+- 主机冒烟测试、三端原生库、页对齐和导出符号检查、Python 单元测试。
+- Dart：插件和示例的 `format`、`analyze`、`test`（`dart-checks` 任务）。
+- iOS：模拟器上运行 `example/integration_test/flow_test.dart`。
+- Android、鸿蒙真机验证（第 5 节）暂缓。需要真机时先征得用户同意。
