@@ -201,6 +201,7 @@ static int test_local(const char *root)
 	char work[PATH_SIZE];
 	char verify[PATH_SIZE];
 	char file[PATH_SIZE];
+	char other[PATH_SIZE];
 	char branch[128];
 	char merge_oid[41];
 	char pushed_oid[41];
@@ -209,6 +210,7 @@ static int test_local(const char *root)
 	qg_repo *repo = NULL;
 	qg_repo *clone = NULL;
 	int result = -1;
+	int status = -1;
 
 	snprintf(remote, sizeof(remote), "%s/remote.git", root);
 	snprintf(work, sizeof(work), "%s/work", root);
@@ -237,6 +239,9 @@ static int test_local(const char *root)
 			goto done;
 		printf("     branch is %s\n", branch);
 	}
+
+	if (head_state_is(repo, "clean", "head reports a clean repository") < 0)
+		goto done;
 
 	if (push_branch(repo, branch) < 0)
 		goto done;
@@ -310,7 +315,7 @@ static int test_local(const char *root)
 
 	CHECK(qg_add_all(repo, &err));
 	CHECK(qg_merge_commit(repo, "merge feature", AUTHOR_NAME, AUTHOR_EMAIL, merge_oid, &err));
-	if (head_state_is(repo, "none", "head reports no merge after the merge commit") < 0)
+	if (head_state_is(repo, "clean", "head reports no merge after the merge commit") < 0)
 		goto done;
 
 	if (head_oid(repo, pushed_oid) < 0)
@@ -320,6 +325,60 @@ static int test_local(const char *root)
 		goto done;
 	}
 	printf("ok   head points at the merge commit\n");
+
+	if (push_branch(repo, branch) < 0)
+		goto done;
+
+	printf("-- normal merge\n");
+
+	CHECK(qg_branch_create(repo, "side", NULL, &err));
+	CHECK(qg_checkout_branch(repo, "side", &err));
+
+	if (join_path(other, sizeof(other), work, "side.txt") < 0 ||
+	    write_text(other, "side\n") < 0) {
+		printf("FAIL cannot write %s\n", other);
+		goto done;
+	}
+
+	CHECK(qg_add_all(repo, &err));
+	{
+		char oid[41];
+
+		CHECK(qg_commit(repo, "side edit", AUTHOR_NAME, AUTHOR_EMAIL, oid, &err));
+	}
+
+	CHECK(qg_checkout_branch(repo, branch, &err));
+
+	if (join_path(other, sizeof(other), work, "main.txt") < 0 ||
+	    write_text(other, "main\n") < 0) {
+		printf("FAIL cannot write %s\n", other);
+		goto done;
+	}
+
+	CHECK(qg_add_all(repo, &err));
+	{
+		char oid[41];
+
+		CHECK(qg_commit(repo, "main edit", AUTHOR_NAME, AUTHOR_EMAIL, oid, &err));
+	}
+
+	CHECK(qg_merge(repo, "side", AUTHOR_NAME, AUTHOR_EMAIL, &result, merge_oid, &err));
+	if (result != 2) {
+		printf("FAIL expected a merge commit (2), got %d\n", result);
+		goto done;
+	}
+	printf("ok   merge creates a merge commit\n");
+
+	if (head_state_is(repo, "clean", "head reports clean after an automatic merge") < 0)
+		goto done;
+
+	{
+		char oid[41];
+		int rc = qg_merge_commit(repo, "no merge", AUTHOR_NAME, AUTHOR_EMAIL, oid, &err);
+
+		if (expect_code(rc, QG_EINVALID, "merge commit refuses a finished merge") < 0)
+			goto done;
+	}
 
 	if (push_branch(repo, branch) < 0)
 		goto done;
@@ -386,13 +445,13 @@ static int test_local(const char *root)
 	}
 	printf("ok   cloned head matches the pushed fast-forward commit\n");
 
-	result = 0;
+	status = 0;
 
 done:
 	qg_string_free(conflicts);
 	qg_repo_free(clone);
 	qg_repo_free(repo);
-	return result;
+	return status;
 }
 
 static int test_https(const char *root, const char *url)
