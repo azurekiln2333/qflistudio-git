@@ -79,10 +79,14 @@ class _FlowPageState extends State<FlowPage> {
   }
 
   Future<void> _runFlow() async {
-    final remoteUrl = _remoteController.text.trim();
-    if (remoteUrl.isEmpty) {
+    final typedUrl = _remoteController.text.trim();
+    if (typedUrl.isEmpty) {
       _showMessage('Enter a remote URL.');
       return;
+    }
+    final remoteUrl = sanitizeRemoteUrl(typedUrl);
+    if (remoteUrl != typedUrl) {
+      _showMessage('Put the token in the Token field. The URL was cleaned.');
     }
     final settings = FlowSettings(
       remoteUrl: remoteUrl,
@@ -120,7 +124,11 @@ class _FlowPageState extends State<FlowPage> {
       await runner.run();
     } catch (error) {
       if (mounted) {
-        _showMessage('Flow stopped: $error');
+        if (error is GitException && error.isCanceled) {
+          _showMessage('Flow canceled.');
+        } else {
+          _showMessage('Flow stopped: $error');
+        }
       }
     } finally {
       cancel.dispose();
@@ -256,20 +264,31 @@ class _FlowPageState extends State<FlowPage> {
   }
 
   Widget _stepRow(ThemeData theme, FlowStep step) {
-    final color = step.succeeded ? Colors.green.shade700 : theme.colorScheme.error;
+    final IconData icon;
+    final Color color;
+    if (step.succeeded) {
+      icon = Icons.check_circle;
+      color = Colors.green.shade700;
+    } else if (step.cancelled) {
+      icon = Icons.cancel_outlined;
+      color = Colors.orange.shade800;
+    } else {
+      icon = Icons.error;
+      color = theme.colorScheme.error;
+    }
     final text = step.succeeded ? step.detail : step.error;
+    final subtitle = text == null || text.isEmpty
+        ? (step.cancelled ? '已取消' : null)
+        : text;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: ListTile(
         dense: true,
-        leading: Icon(
-          step.succeeded ? Icons.check_circle : Icons.error,
-          color: color,
-        ),
+        leading: Icon(icon, color: color),
         title: Text(step.name),
-        subtitle: text == null || text.isEmpty
+        subtitle: subtitle == null
             ? null
-            : Text(text, maxLines: 4, overflow: TextOverflow.ellipsis),
+            : Text(subtitle, maxLines: 4, overflow: TextOverflow.ellipsis),
         trailing: Text('${step.elapsed.inMilliseconds} ms'),
       ),
     );

@@ -54,12 +54,8 @@ void main() {
     final mainBranch = baseHead.branch!;
     expect(baseHead.state, 'clean');
 
-    File(p.join(repo.path, 'flow.txt')).writeAsStringSync('base\nmain\n');
-    File(p.join(repo.path, 'branch.txt')).writeAsStringSync('base\n');
-    await repo.addAll();
-    final mainCommit = await repo.commit('main change', author);
-    expect(mainCommit, hasLength(40));
-
+    // Cut the feature branch from the clone, so the two histories diverge and
+    // the merge below has to be a real three way merge.
     await repo.createBranch('feature');
     await repo.checkout('feature');
 
@@ -67,12 +63,20 @@ void main() {
     File(p.join(repo.path, 'branch.txt')).writeAsStringSync('base\nfeature\n');
     await repo.addAll();
     final featureCommit = await repo.commit('feature change', author);
-    expect(featureCommit, isNot(mainCommit));
+    expect(featureCommit, hasLength(40));
 
     await repo.checkout(mainBranch);
 
+    File(p.join(repo.path, 'flow.txt')).writeAsStringSync('base\nmain\n');
+    await repo.addAll();
+    final mainCommit = await repo.commit('main change', author);
+    expect(mainCommit, isNot(featureCommit));
+
     final outcome = await repo.merge('feature', author);
     expect(outcome, MergeOutcome.conflicts);
+
+    final mergeHead = await repo.head();
+    expect(mergeHead.state, 'merge');
 
     final conflicts = await repo.conflicts();
     expect(conflicts, contains('flow.txt'));

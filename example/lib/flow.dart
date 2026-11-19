@@ -3,12 +3,35 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:qfli_git/qfli_git.dart';
 
+/// Removes any userinfo from [url].
+///
+/// libgit2 writes the remote URL into `.git/config`, so a token embedded in the
+/// URL would reach the disk. Credentials belong in the Token field.
+String sanitizeRemoteUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.userInfo.isEmpty) {
+    return url;
+  }
+  return uri.replace(userInfo: '').toString();
+}
+
+/// Returns `host/path` for [url], so a step detail never shows userinfo.
+String displayRemoteUrl(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.host.isEmpty) {
+    return url;
+  }
+  final path = uri.path.startsWith('/') ? uri.path : '/${uri.path}';
+  return '${uri.host}$path';
+}
+
 /// One finished step of [FlowRunner.run].
 class FlowStep {
   const FlowStep({
     required this.name,
     required this.succeeded,
     required this.elapsed,
+    this.cancelled = false,
     this.detail,
     this.error,
   });
@@ -18,6 +41,10 @@ class FlowStep {
 
   /// Whether the step finished without an exception.
   final bool succeeded;
+
+  /// Whether the cancel button stopped the step. A cancelled step is a normal
+  /// ending, not a failure.
+  final bool cancelled;
 
   /// Wall clock time spent in the step.
   final Duration elapsed;
@@ -30,7 +57,11 @@ class FlowStep {
 
   @override
   String toString() {
-    final state = succeeded ? 'ok' : 'failed';
+    final state = cancelled
+        ? 'cancelled'
+        : succeeded
+        ? 'ok'
+        : 'failed';
     final text = detail ?? error ?? '';
     return '$name: $state (${elapsed.inMilliseconds} ms) $text';
   }
@@ -75,6 +106,7 @@ class FlowRunner {
   final FlowSettings settings;
 
   /// Directory that receives the clone. Its content is replaced on every run.
+  /// The previous clone is renamed to `<workPath>.previous` first.
   final String workPath;
 
   final void Function(FlowStep step) onStep;
@@ -90,24 +122,30 @@ class FlowRunner {
   Future<void> run() async {
     final repoDir = Directory(workPath);
     if (repoDir.existsSync()) {
-      repoDir.deleteSync(recursive: true);
+      // Keep the last run for inspection instead of deleting the failure site.
+      final previous = Directory('$workPath.previous');
+      if (previous.existsSync()) {
+        previous.deleteSync(recursive: true);
+      }
+      repoDir.renameSync(previous.path);
     }
     repoDir.createSync(recursive: true);
 
     final author = settings.author;
+    final cloneUrl = sanitizeRemoteUrl(settings.remoteUrl);
     late final GitRepository repo;
     late final String defaultBranch;
 
     await _step('clone', () async {
       repo = await GitRepository.clone(
-        url: settings.remoteUrl,
+        url: cloneUrl,
         path: workPath,
         username: settings.username,
         token: settings.token,
         cancel: cancel,
       );
       defaultBranch = (await repo.head()).branch ?? settings.branch;
-      return settings.remoteUrl;
+      return displayRemoteUrl(cloneUrl);
     });
 
     await _step('write base file', () async {
@@ -169,6 +207,10 @@ class FlowRunner {
         _resolveByConcatenation(File(p.join(repo.path, path)));
       }
       await repo.addAll();
+      final unresolved = await repo.conflicts();
+      if (unresolved.isNotEmpty) {
+        throw StateError('unresolved: ${unresolved.join(', ')}');
+      }
       return conflicts.join(', ');
     });
 
@@ -202,12 +244,14 @@ class FlowRunner {
         ),
       );
     } catch (error) {
+      final cancelled = error is GitException && error.isCanceled;
       onStep(
         FlowStep(
           name: name,
           succeeded: false,
+          cancelled: cancelled,
           elapsed: watch.elapsed,
-          error: _describe(error),
+          error: cancelled ? null : _describe(error),
         ),
       );
       rethrow;
