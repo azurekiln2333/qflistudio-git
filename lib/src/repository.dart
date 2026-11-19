@@ -810,15 +810,16 @@ T _withRepo<T>(
   }
 }
 
-/// Calls `qg_init` when the caller already ran [QfliGit.ensureInitialized].
+/// Calls `qg_init` for every operation.
+///
+/// A null [caFile] still initializes libgit2. The CA bundle is optional, so a
+/// caller that skipped [QfliGit.ensureInitialized] gets a working library
+/// without certificates instead of an uninitialized one.
 void _initIfNeeded(
   QfliGitBindings bindings,
   String? caFile,
   Pointer<QgError> error,
 ) {
-  if (caFile == null) {
-    return;
-  }
   _withUtf8([caFile], (values) {
     final code = bindings.init(values[0], error);
     if (code != 0) {
