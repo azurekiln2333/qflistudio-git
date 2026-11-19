@@ -156,6 +156,10 @@ class CollectTests(unittest.TestCase):
             encoding="utf-8",
         )
         (directory / "LICENSE").write_text("GPL-3.0-or-later\n", encoding="utf-8")
+        licenses = directory / "third_party/licenses"
+        licenses.mkdir(parents=True)
+        for name in ("libgit2.txt", "mbedtls.txt", "cacert.txt"):
+            (licenses / name).write_text(f"{name} terms\n", encoding="utf-8")
         for abi in collect.PLATFORM_ABIS["android"]:
             build = directory / abi
             build.mkdir(parents=True)
@@ -189,6 +193,34 @@ class CollectTests(unittest.TestCase):
                 self.assertGreater(record["bytes"], 0)
                 self.assertGreater(record["zipBytes"], 0)
                 self.assertEqual(len(record["sha256"]), 64)
+
+    def test_upstream_licenses_are_collected(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            self.prepare(directory)
+            with mock.patch.object(collect, "tool_output", side_effect=self.fake_tool):
+                self.assertEqual(collect.main(elf_arguments(directory, "readelf", "nm")), 0)
+            manifest = json.loads(
+                (directory / "artifacts/manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                sorted(manifest["licenses"]),
+                [
+                    "licenses/CACERT-LICENSE",
+                    "licenses/LIBGIT2-LICENSE",
+                    "licenses/MBEDTLS-LICENSE",
+                    "licenses/PROJECT-LICENSE",
+                ],
+            )
+            for relative in manifest["licenses"]:
+                self.assertTrue((directory / "artifacts" / relative).is_file())
+
+    def test_repository_licenses_exist(self) -> None:
+        licenses = Path(__file__).resolve().parents[2] / "third_party" / "licenses"
+        for name in ("libgit2.txt", "mbedtls.txt", "cacert.txt"):
+            path = licenses / name
+            self.assertTrue(path.is_file(), msg=str(path))
+            self.assertGreater(path.stat().st_size, 0, msg=str(path))
 
     def test_unaligned_library_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:
