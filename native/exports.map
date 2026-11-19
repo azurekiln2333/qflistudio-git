@@ -1,0 +1,6 @@
+{
+  global:
+    qg_*;
+  local:
+    *;
+};
