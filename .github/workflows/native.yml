@@ -49,6 +49,34 @@ jobs:
       - name: Run smoke test
         run: ./native/build/ci/host/qfli_git_smoke
 
+  dart-checks:
+    name: Dart analyze and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - name: Plugin analyze and unit tests
+        run: |
+          flutter pub get
+          bash tool/ci/run_annotated.sh plugin-format dart format --output=none --set-exit-if-changed lib test
+          bash tool/ci/run_annotated.sh plugin-analyze flutter analyze lib test
+          bash tool/ci/run_annotated.sh plugin-test flutter test
+      - name: Example analyze and widget tests
+        working-directory: example
+        run: |
+          flutter pub get
+          bash ../tool/ci/run_annotated.sh example-analyze flutter analyze
+          bash ../tool/ci/run_annotated.sh example-test flutter test
+
   android:
     name: Android (3 ABIs)
     runs-on: ubuntu-24.04
