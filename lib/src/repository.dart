@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -160,6 +161,9 @@ class GitException implements Exception {
 ///
 /// The token owns a native `int32_t`. Pass its address to a background isolate
 /// so [cancel] affects the running operation from the UI isolate.
+///
+/// [dispose] does not free the flag while an operation still reads it. The
+/// last [releaseOperation] frees it.
 class CancelToken {
   CancelToken() {
     // malloc leaves the value undefined, so clear it before the first call.
@@ -167,13 +171,41 @@ class CancelToken {
   }
 
   Pointer<Int32> _flag = malloc<Int32>();
+  int _pending = 0;
+  bool _releaseRequested = false;
 
-  int get _address {
+  /// Number of operations that still hold the native flag.
+  @visibleForTesting
+  int get pendingOperations => _pending;
+
+  /// Marks an operation as started and returns the flag address.
+  ///
+  /// [GitRepository] calls it before clone, fetch and push. Tests use it to
+  /// simulate a running operation without native code.
+  @visibleForTesting
+  int acquireOperation() {
     final flag = _flag;
     if (flag == nullptr) {
       throw StateError('CancelToken has been disposed.');
     }
+    _pending++;
     return flag.address;
+  }
+
+  /// Marks one operation as finished.
+  ///
+  /// When [dispose] was already called and this was the last operation, the
+  /// flag is freed now. Tests use it to end a simulated operation.
+  @visibleForTesting
+  void releaseOperation() {
+    assert(_pending > 0, 'releaseOperation without a running operation');
+    if (_pending == 0) {
+      return;
+    }
+    _pending--;
+    if (_pending == 0 && _releaseRequested) {
+      _freeFlag();
+    }
   }
 
   /// Asks the running operation to stop.
@@ -185,8 +217,21 @@ class CancelToken {
     flag.value = 1;
   }
 
-  /// Releases the native flag. Call it after the operation finished.
+  /// Releases the native flag.
+  ///
+  /// A running operation still reads the flag, so the free is deferred until
+  /// the last [releaseOperation]. [cancel] keeps working until then.
   void dispose() {
+    if (_flag == nullptr) {
+      return;
+    }
+    _releaseRequested = true;
+    if (_pending == 0) {
+      _freeFlag();
+    }
+  }
+
+  void _freeFlag() {
     final flag = _flag;
     if (flag == nullptr) {
       return;
@@ -194,6 +239,7 @@ class CancelToken {
     flag.value = 0;
     malloc.free(flag);
     _flag = nullptr;
+    _releaseRequested = false;
   }
 }
 
@@ -325,46 +371,56 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final target = _absolute(path);
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(() {
-      final bindings = QfliGitBindings(openQfliGitLibrary());
-      final error = calloc<QgError>();
-      final out = calloc<Pointer<QgRepo>>();
-      final cancelFlag = _cancelPointer(cancelAddress);
-      try {
-        _initIfNeeded(bindings, caFile, error);
-        return _withUtf8([url, target, username, token], (values) {
-          final code = bindings.clone(
-            values[0],
-            values[1],
-            values[2],
-            values[3],
-            cancelFlag,
-            out,
-            error,
-          );
-          if (code != 0) {
-            throw GitException.fromNative(NativeError.read(error, code));
-          }
-          final repo = out.value;
-          if (repo == nullptr) {
-            throw const GitException(
-              qgEInvalid,
-              0,
-              'qg_clone returned no handle',
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      return await Isolate.run(() {
+        final bindings = QfliGitBindings(openQfliGitLibrary());
+        Pointer<QgError> error = nullptr;
+        Pointer<Pointer<QgRepo>> out = nullptr;
+        try {
+          error = calloc<QgError>();
+          out = calloc<Pointer<QgRepo>>();
+          final cancelFlag = _cancelPointer(cancelAddress);
+          _initIfNeeded(bindings, caFile, error);
+          return _withUtf8([url, target, username, token], (values) {
+            final code = bindings.clone(
+              values[0],
+              values[1],
+              values[2],
+              values[3],
+              cancelFlag,
+              out,
+              error,
             );
+            if (code != 0) {
+              throw GitException.fromNative(NativeError.read(error, code));
+            }
+            final repo = out.value;
+            if (repo == nullptr) {
+              throw const GitException(
+                qgEInvalid,
+                0,
+                'qg_clone returned no handle',
+              );
+            }
+            bindings.repoFree(repo);
+            return GitRepository._(target);
+          });
+        } finally {
+          if (out != nullptr) {
+            calloc.free(out);
           }
-          bindings.repoFree(repo);
-          return GitRepository._(target);
-        });
-      } finally {
-        calloc.free(out);
-        calloc.free(error);
-      }
-    });
+          if (error != nullptr) {
+            calloc.free(error);
+          }
+        }
+      });
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   /// Creates a repository at [path].
@@ -595,26 +651,30 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final repoPath = path;
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(
-      () => _withRepo(repoPath, caFile, (session) {
-        _withUtf8([remote, username, token], (values) {
-          session.check(
-            session.bindings.fetch(
-              session.repo,
-              values[0],
-              values[1],
-              values[2],
-              _cancelPointer(cancelAddress),
-              session.error,
-            ),
-          );
-        });
-      }),
-    );
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      await Isolate.run(
+        () => _withRepo(repoPath, caFile, (session) {
+          _withUtf8([remote, username, token], (values) {
+            session.check(
+              session.bindings.fetch(
+                session.repo,
+                values[0],
+                values[1],
+                values[2],
+                _cancelPointer(cancelAddress),
+                session.error,
+              ),
+            );
+          });
+        }),
+      );
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   /// Pushes [refspec] to [remote]. Pass [token] for a private repository and
@@ -625,27 +685,31 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final repoPath = path;
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(
-      () => _withRepo(repoPath, caFile, (session) {
-        _withUtf8([remote, refspec, username, token], (values) {
-          session.check(
-            session.bindings.push(
-              session.repo,
-              values[0],
-              values[1],
-              values[2],
-              values[3],
-              _cancelPointer(cancelAddress),
-              session.error,
-            ),
-          );
-        });
-      }),
-    );
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      await Isolate.run(
+        () => _withRepo(repoPath, caFile, (session) {
+          _withUtf8([remote, refspec, username, token], (values) {
+            session.check(
+              session.bindings.push(
+                session.repo,
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                _cancelPointer(cancelAddress),
+                session.error,
+              ),
+            );
+          });
+        }),
+      );
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   @override

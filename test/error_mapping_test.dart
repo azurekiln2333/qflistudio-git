@@ -120,5 +120,59 @@ void main() {
 
       token.cancel();
     });
+
+    test('keeps the flag alive while an operation runs', () {
+      final token = CancelToken();
+      final address = token.acquireOperation();
+
+      token.dispose();
+
+      expect(token.pendingOperations, 1);
+      expect(Pointer<Int32>.fromAddress(address).value, 0);
+
+      token.cancel();
+      expect(Pointer<Int32>.fromAddress(address).value, 1);
+
+      token.releaseOperation();
+      expect(token.pendingOperations, 0);
+      expect(() => token.acquireOperation(), throwsStateError);
+    });
+
+    test('frees the flag at dispose when no operation runs', () {
+      final token = CancelToken()..dispose();
+
+      expect(token.pendingOperations, 0);
+      expect(() => token.acquireOperation(), throwsStateError);
+    });
+
+    test('counts overlapping operations', () {
+      final token = CancelToken();
+
+      token.acquireOperation();
+      token.acquireOperation();
+      expect(token.pendingOperations, 2);
+
+      token.releaseOperation();
+      expect(token.pendingOperations, 1);
+
+      token.dispose();
+      expect(token.pendingOperations, 1);
+
+      token.releaseOperation();
+      expect(() => token.acquireOperation(), throwsStateError);
+    });
+
+    test('a released token can start a new operation', () {
+      final token = CancelToken();
+
+      token.acquireOperation();
+      token.releaseOperation();
+      final address = token.acquireOperation();
+
+      expect(address, isNonZero);
+
+      token.releaseOperation();
+      token.dispose();
+    });
   });
 }
