@@ -186,6 +186,20 @@ def extract_zip(archive: Path, destination: Path) -> None:
         bundle.extractall(destination)
 
 
+def artifact_root(extracted: Path) -> Path:
+    """Return the directory holding manifest.json, allowing one wrapper directory."""
+    if (extracted / "manifest.json").is_file():
+        return extracted
+    candidates = sorted(
+        child
+        for child in extracted.iterdir()
+        if child.is_dir() and (child / "manifest.json").is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    raise ArtifactError(f"Missing manifest.json in {extracted}")
+
+
 def import_release(tag: str, repo_root: Path, platforms: list[str], token: str | None) -> list[dict]:
     results = []
     with tempfile.TemporaryDirectory(prefix="qfli-git-release-") as work:
@@ -196,7 +210,7 @@ def import_release(tag: str, repo_root: Path, platforms: list[str], token: str |
             extracted = workdir / platform
             extracted.mkdir()
             extract_zip(archive, extracted)
-            results.append(import_artifact(extracted, repo_root))
+            results.append(import_artifact(artifact_root(extracted), repo_root))
     return results
 
 

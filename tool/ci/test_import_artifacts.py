@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -201,6 +202,44 @@ class ImportTests(unittest.TestCase):
                 import_module.verify_manifest(
                     artifact, import_module.load_manifest(artifact)
                 )
+
+    def test_release_zip_with_wrapper_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            staging = Path(work) / "staging"
+            inside = staging / "qfli-git-ohos-abc123"
+            write_manifest(
+                inside,
+                "ohos",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+            )
+            archive = Path(work) / "ohos.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                for source in sorted(inside.rglob("*")):
+                    if source.is_file():
+                        bundle.write(source, source.relative_to(staging).as_posix())
+            extracted = Path(work) / "extracted"
+            import_module.extract_zip(archive, extracted)
+            found = import_module.artifact_root(extracted)
+            self.assertEqual(found, extracted / "qfli-git-ohos-abc123")
+            self.assertEqual(
+                import_module.main(["--artifact", str(found), "--repo-root", str(root)]),
+                0,
+            )
+            self.assertTrue((root / "ohos/libs/arm64-v8a/libqfli_git.so").is_file())
+
+    def test_artifact_root_rejects_two_wrapper_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            extracted = Path(work)
+            for name in ("first", "second"):
+                write_manifest(
+                    extracted / name,
+                    "ohos",
+                    [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+                )
+            with self.assertRaises(import_module.ArtifactError):
+                import_module.artifact_root(extracted)
 
     def test_missing_manifest_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:

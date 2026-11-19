@@ -267,7 +267,7 @@ jobs:
           cd dist
           for directory in */; do
             name="${directory%/}"
-            zip -r -9 -q "$name.zip" "$directory"
+            ( cd "$directory" && zip -r -9 -q "../$name.zip" . ) || exit 1
           done
           sha256sum ./*.zip > SHA256SUMS
           ls -l ./*.zip
