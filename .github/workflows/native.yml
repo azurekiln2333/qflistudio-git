@@ -4,6 +4,7 @@ name: Native libraries
   push:
     branches:
       - main
+      - 'integration/**'
     tags:
       - 'native-v*'
   workflow_dispatch:
