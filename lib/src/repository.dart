@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -55,12 +56,24 @@ enum MergeOutcome {
 
 /// One entry of [GitRepository.status].
 class GitStatusEntry {
-  const GitStatusEntry({required this.path, required this.status});
+  const GitStatusEntry({
+    required this.path,
+    required this.status,
+    this.statusBits = 0,
+  });
 
   final String path;
 
   /// Status text reported by the native layer, for example `modified`.
+  ///
+  /// It is the highest set bit of [statusBits] as text.
   final String status;
+
+  /// Raw `git_status_t` bit mask of the entry, for example `256`.
+  ///
+  /// Use it to test several states at once, for example
+  /// `entry.statusBits & 256 != 0` for a modified work tree.
+  final int statusBits;
 
   factory GitStatusEntry.fromJson(Object? json) {
     if (json is! Map) {
@@ -71,7 +84,12 @@ class GitStatusEntry {
       throw const FormatException('status entry without a path');
     }
     final status = json['status'];
-    return GitStatusEntry(path: path, status: status is String ? status : '');
+    final bits = json['status_bits'];
+    return GitStatusEntry(
+      path: path,
+      status: status is String ? status : '',
+      statusBits: bits is int ? bits : 0,
+    );
   }
 
   @override
@@ -88,7 +106,8 @@ class GitHead {
   /// Full hexadecimal commit id.
   final String oid;
 
-  /// Repository state text, for example `clean` or `merge`.
+  /// Repository state text: `clean` when no operation is in progress,
+  /// `merge` while a merge is open, and other libgit2 state names otherwise.
   final String state;
 
   factory GitHead.fromJson(Object? json) {
@@ -142,6 +161,9 @@ class GitException implements Exception {
 ///
 /// The token owns a native `int32_t`. Pass its address to a background isolate
 /// so [cancel] affects the running operation from the UI isolate.
+///
+/// [dispose] does not free the flag while an operation still reads it. The
+/// last [releaseOperation] frees it.
 class CancelToken {
   CancelToken() {
     // malloc leaves the value undefined, so clear it before the first call.
@@ -149,13 +171,41 @@ class CancelToken {
   }
 
   Pointer<Int32> _flag = malloc<Int32>();
+  int _pending = 0;
+  bool _releaseRequested = false;
 
-  int get _address {
+  /// Number of operations that still hold the native flag.
+  @visibleForTesting
+  int get pendingOperations => _pending;
+
+  /// Marks an operation as started and returns the flag address.
+  ///
+  /// [GitRepository] calls it before clone, fetch and push. Tests use it to
+  /// simulate a running operation without native code.
+  @visibleForTesting
+  int acquireOperation() {
     final flag = _flag;
     if (flag == nullptr) {
       throw StateError('CancelToken has been disposed.');
     }
+    _pending++;
     return flag.address;
+  }
+
+  /// Marks one operation as finished.
+  ///
+  /// When [dispose] was already called and this was the last operation, the
+  /// flag is freed now. Tests use it to end a simulated operation.
+  @visibleForTesting
+  void releaseOperation() {
+    assert(_pending > 0, 'releaseOperation without a running operation');
+    if (_pending == 0) {
+      return;
+    }
+    _pending--;
+    if (_pending == 0 && _releaseRequested) {
+      _freeFlag();
+    }
   }
 
   /// Asks the running operation to stop.
@@ -167,8 +217,21 @@ class CancelToken {
     flag.value = 1;
   }
 
-  /// Releases the native flag. Call it after the operation finished.
+  /// Releases the native flag.
+  ///
+  /// A running operation still reads the flag, so the free is deferred until
+  /// the last [releaseOperation]. [cancel] keeps working until then.
   void dispose() {
+    if (_flag == nullptr) {
+      return;
+    }
+    _releaseRequested = true;
+    if (_pending == 0) {
+      _freeFlag();
+    }
+  }
+
+  void _freeFlag() {
     final flag = _flag;
     if (flag == nullptr) {
       return;
@@ -176,6 +239,7 @@ class CancelToken {
     flag.value = 0;
     malloc.free(flag);
     _flag = nullptr;
+    _releaseRequested = false;
   }
 }
 
@@ -270,9 +334,11 @@ class QfliGit {
 
   static void _initNative(String caFile) {
     final bindings = QfliGitBindings(openQfliGitLibrary());
-    final error = calloc<QgError>();
-    final caFilePointer = caFile.toNativeUtf8();
+    Pointer<QgError> error = nullptr;
+    Pointer<Utf8> caFilePointer = nullptr;
     try {
+      error = calloc<QgError>();
+      caFilePointer = caFile.toNativeUtf8();
       final code = bindings.init(caFilePointer, error);
       if (code != 0) {
         throw GitException.fromNative(NativeError.read(error, code));
@@ -284,8 +350,12 @@ class QfliGit {
         );
       }
     } finally {
-      malloc.free(caFilePointer);
-      calloc.free(error);
+      if (caFilePointer != nullptr) {
+        malloc.free(caFilePointer);
+      }
+      if (error != nullptr) {
+        calloc.free(error);
+      }
     }
   }
 }
@@ -307,46 +377,56 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final target = _absolute(path);
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(() {
-      final bindings = QfliGitBindings(openQfliGitLibrary());
-      final error = calloc<QgError>();
-      final out = calloc<Pointer<QgRepo>>();
-      final cancelFlag = _cancelPointer(cancelAddress);
-      try {
-        _initIfNeeded(bindings, caFile, error);
-        return _withUtf8([url, target, username, token], (values) {
-          final code = bindings.clone(
-            values[0],
-            values[1],
-            values[2],
-            values[3],
-            cancelFlag,
-            out,
-            error,
-          );
-          if (code != 0) {
-            throw GitException.fromNative(NativeError.read(error, code));
-          }
-          final repo = out.value;
-          if (repo == nullptr) {
-            throw const GitException(
-              qgEInvalid,
-              0,
-              'qg_clone returned no handle',
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      return await Isolate.run(() {
+        final bindings = QfliGitBindings(openQfliGitLibrary());
+        Pointer<QgError> error = nullptr;
+        Pointer<Pointer<QgRepo>> out = nullptr;
+        try {
+          error = calloc<QgError>();
+          out = calloc<Pointer<QgRepo>>();
+          final cancelFlag = _cancelPointer(cancelAddress);
+          _initIfNeeded(bindings, caFile, error);
+          return _withUtf8([url, target, username, token], (values) {
+            final code = bindings.clone(
+              values[0],
+              values[1],
+              values[2],
+              values[3],
+              cancelFlag,
+              out,
+              error,
             );
+            if (code != 0) {
+              throw GitException.fromNative(NativeError.read(error, code));
+            }
+            final repo = out.value;
+            if (repo == nullptr) {
+              throw const GitException(
+                qgEInvalid,
+                0,
+                'qg_clone returned no handle',
+              );
+            }
+            bindings.repoFree(repo);
+            return GitRepository._(target);
+          });
+        } finally {
+          if (out != nullptr) {
+            calloc.free(out);
           }
-          bindings.repoFree(repo);
-          return GitRepository._(target);
-        });
-      } finally {
-        calloc.free(out);
-        calloc.free(error);
-      }
-    });
+          if (error != nullptr) {
+            calloc.free(error);
+          }
+        }
+      });
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   /// Creates a repository at [path].
@@ -355,9 +435,11 @@ class GitRepository {
     final caFile = QfliGit.caFile;
     return Isolate.run(() {
       final bindings = QfliGitBindings(openQfliGitLibrary());
-      final error = calloc<QgError>();
-      final out = calloc<Pointer<QgRepo>>();
+      Pointer<QgError> error = nullptr;
+      Pointer<Pointer<QgRepo>> out = nullptr;
       try {
+        error = calloc<QgError>();
+        out = calloc<Pointer<QgRepo>>();
         _initIfNeeded(bindings, caFile, error);
         return _withUtf8([target], (values) {
           final code = bindings.repoInit(values[0], bare ? 1 : 0, out, error);
@@ -376,8 +458,12 @@ class GitRepository {
           return GitRepository._(target);
         });
       } finally {
-        calloc.free(out);
-        calloc.free(error);
+        if (out != nullptr) {
+          calloc.free(out);
+        }
+        if (error != nullptr) {
+          calloc.free(error);
+        }
       }
     });
   }
@@ -577,26 +663,30 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final repoPath = path;
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(
-      () => _withRepo(repoPath, caFile, (session) {
-        _withUtf8([remote, username, token], (values) {
-          session.check(
-            session.bindings.fetch(
-              session.repo,
-              values[0],
-              values[1],
-              values[2],
-              _cancelPointer(cancelAddress),
-              session.error,
-            ),
-          );
-        });
-      }),
-    );
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      await Isolate.run(
+        () => _withRepo(repoPath, caFile, (session) {
+          _withUtf8([remote, username, token], (values) {
+            session.check(
+              session.bindings.fetch(
+                session.repo,
+                values[0],
+                values[1],
+                values[2],
+                _cancelPointer(cancelAddress),
+                session.error,
+              ),
+            );
+          });
+        }),
+      );
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   /// Pushes [refspec] to [remote]. Pass [token] for a private repository and
@@ -607,27 +697,31 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
-  }) {
+  }) async {
     final repoPath = path;
     final caFile = QfliGit.caFile;
-    final cancelAddress = cancel?._address;
-    return Isolate.run(
-      () => _withRepo(repoPath, caFile, (session) {
-        _withUtf8([remote, refspec, username, token], (values) {
-          session.check(
-            session.bindings.push(
-              session.repo,
-              values[0],
-              values[1],
-              values[2],
-              values[3],
-              _cancelPointer(cancelAddress),
-              session.error,
-            ),
-          );
-        });
-      }),
-    );
+    final cancelAddress = cancel?.acquireOperation();
+    try {
+      await Isolate.run(
+        () => _withRepo(repoPath, caFile, (session) {
+          _withUtf8([remote, refspec, username, token], (values) {
+            session.check(
+              session.bindings.push(
+                session.repo,
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                _cancelPointer(cancelAddress),
+                session.error,
+              ),
+            );
+          });
+        }),
+      );
+    } finally {
+      cancel?.releaseOperation();
+    }
   }
 
   @override
@@ -678,10 +772,13 @@ T _withRepo<T>(
   T Function(_Session session) body,
 ) {
   final bindings = QfliGitBindings(openQfliGitLibrary());
-  final error = calloc<QgError>();
-  final out = calloc<Pointer<QgRepo>>();
-  final pathPointer = repoPath.toNativeUtf8();
+  Pointer<QgError> error = nullptr;
+  Pointer<Pointer<QgRepo>> out = nullptr;
+  Pointer<Utf8> pathPointer = nullptr;
   try {
+    error = calloc<QgError>();
+    out = calloc<Pointer<QgRepo>>();
+    pathPointer = repoPath.toNativeUtf8();
     _initIfNeeded(bindings, caFile, error);
     final code = bindings.repoOpen(pathPointer, out, error);
     if (code != 0) {
@@ -701,21 +798,28 @@ T _withRepo<T>(
       bindings.repoFree(repo);
     }
   } finally {
-    malloc.free(pathPointer);
-    calloc.free(out);
-    calloc.free(error);
+    if (pathPointer != nullptr) {
+      malloc.free(pathPointer);
+    }
+    if (out != nullptr) {
+      calloc.free(out);
+    }
+    if (error != nullptr) {
+      calloc.free(error);
+    }
   }
 }
 
-/// Calls `qg_init` when the caller already ran [QfliGit.ensureInitialized].
+/// Calls `qg_init` for every operation.
+///
+/// A null [caFile] still initializes libgit2. The CA bundle is optional, so a
+/// caller that skipped [QfliGit.ensureInitialized] gets a working library
+/// without certificates instead of an uninitialized one.
 void _initIfNeeded(
   QfliGitBindings bindings,
   String? caFile,
   Pointer<QgError> error,
 ) {
-  if (caFile == null) {
-    return;
-  }
   _withUtf8([caFile], (values) {
     final code = bindings.init(values[0], error);
     if (code != 0) {

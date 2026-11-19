@@ -43,6 +43,25 @@ void main() {
       expect(entries.single.status, isEmpty);
     });
 
+    test('reads status_bits', () {
+      final entries = parseStatusEntries(
+        '[{"path":"a.txt","status":"modified","status_bits":256},'
+        '{"path":"b.txt","status":"deleted","status_bits":512}]',
+      );
+
+      expect(entries.first.statusBits, 256);
+      expect(entries.last.statusBits, 512);
+    });
+
+    test('defaults missing and malformed status_bits to zero', () {
+      final entries = parseStatusEntries(
+        '[{"path":"a.txt"},{"path":"b.txt","status_bits":"256"}]',
+      );
+
+      expect(entries.first.statusBits, 0);
+      expect(entries.last.statusBits, 0);
+    });
+
     test('returns an empty list for JSON null', () {
       expect(parseStatusEntries('null'), isEmpty);
     });
