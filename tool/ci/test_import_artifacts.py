@@ -241,6 +241,53 @@ class ImportTests(unittest.TestCase):
             with self.assertRaises(import_module.ArtifactError):
                 import_module.artifact_root(extracted)
 
+    def test_abi_traversal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "android",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF arm64")],
+            )
+            manifest = json.loads(
+                (artifact / "manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["files"][0]["abi"] = "../../../escaped"
+            (artifact / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                1,
+            )
+            self.assertFalse((root / "android/escaped").exists())
+            self.assertFalse((root / "native_libs.lock.json").exists())
+
+    def test_unknown_abi_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / "repo"
+            root.mkdir()
+            artifact = Path(work) / "artifact"
+            write_manifest(
+                artifact,
+                "ohos",
+                [("arm64-v8a/libqfli_git.so", "arm64-v8a", b"\x7fELF ohos arm64")],
+            )
+            manifest = json.loads(
+                (artifact / "manifest.json").read_text(encoding="utf-8")
+            )
+            manifest["files"][0]["abi"] = "armeabi-v7a"
+            (artifact / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            self.assertEqual(
+                import_module.main(["--artifact", str(artifact), "--repo-root", str(root)]),
+                1,
+            )
+            self.assertFalse((root / "ohos/libs").exists())
+
     def test_missing_manifest_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             with self.assertRaises(import_module.ArtifactError):

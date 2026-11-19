@@ -18,6 +18,10 @@ RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/tags"
 LIBRARY_NAME = "libqfli_git.so"
 FRAMEWORK_NAME = "qfli_git.xcframework"
 PLATFORM_ORDER = ("android", "ohos", "ios")
+PLATFORM_ABIS = {
+    "android": ("arm64-v8a", "armeabi-v7a", "x86_64"),
+    "ohos": ("arm64-v8a", "x86_64"),
+}
 
 
 class ArtifactError(RuntimeError):
@@ -87,18 +91,24 @@ def is_payload(platform: str, record: dict) -> bool:
     return False
 
 
+def safe_abi(platform: str, record: dict, relative: PurePosixPath) -> str:
+    """Return a whitelisted abi from a manifest record."""
+    abi = record.get("abi")
+    if not abi:
+        raise ArtifactError(f"{platform} artifact needs an abi: {relative}")
+    if abi not in PLATFORM_ABIS[platform]:
+        raise ArtifactError(f"{platform} manifest has an unknown abi: {abi!r}")
+    return abi
+
+
 def destination_for(platform: str, repo_root: Path, record: dict) -> Path:
     """Map one manifest record to its final path inside the plugin."""
     relative = safe_relative(record["path"])
     if platform == "android":
-        abi = record.get("abi")
-        if not abi:
-            raise ArtifactError(f"Android artifact needs an abi: {relative}")
+        abi = safe_abi(platform, record, relative)
         return repo_root / "android/src/main/jniLibs" / abi / relative.name
     if platform == "ohos":
-        abi = record.get("abi")
-        if not abi:
-            raise ArtifactError(f"OHOS artifact needs an abi: {relative}")
+        abi = safe_abi(platform, record, relative)
         return repo_root / "ohos/libs" / abi / relative.name
     if platform == "ios":
         return repo_root / "ios/Frameworks" / relative
