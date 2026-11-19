@@ -1,0 +1,36 @@
+name: qfli_git
+description: Local git operations for Flutter apps, backed by libgit2 and mbedTLS through dart:ffi.
+publish_to: 'none'
+version: 0.1.0
+homepage: https://github.com/azurekiln2333/qflistudio-git
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.3
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  path_provider_ohos: ^2.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # The native libraries are built outside this package. The platform folders
+  # only carry the prebuilt binaries into the app bundle.
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      ohos:
+        ffiPlugin: true
+
+  assets:
+    - assets/cacert.pem

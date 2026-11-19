@@ -1,0 +1,46 @@
+// The Android module carries the prebuilt libqfli_git.so files.
+
+group = "com.azurekiln.qfli_git"
+version = "1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.11.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "com.azurekiln.qfli_git"
+
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk = 24
+    }
+
+    // src/main/jniLibs/<abi>/ is the default source set, so Gradle packages the
+    // libraries without extra configuration. There is no CMake build here: the
+    // .so files arrive from the native CI job.
+}
+
+dependencies {
+}

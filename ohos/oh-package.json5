@@ -1,0 +1,9 @@
+{
+  "name": "qfli_git",
+  "version": "0.1.0",
+  "description": "Local git operations backed by libgit2 and mbedTLS.",
+  "main": "index.ets",
+  "author": "AzureKiln",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {}
+}

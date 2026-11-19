@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "qfli_git",
+    "type": "har",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ]
+  }
+}
