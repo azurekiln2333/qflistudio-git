@@ -1,0 +1,26 @@
+# Native build outputs and downloaded upstream sources
+native/build/
+dist/
+
+# Flutter / Dart
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec_overrides.yaml
+example/build/
+example/.dart_tool/
+
+# OpenHarmony
+**/oh_modules/
+**/.hvigor/
+**/.preview/
+local.properties
+
+*.log
+.DS_Store
+.idea/
+*.iml
+
+# Local Claude settings
+.claude/settings.local.json

@@ -1,0 +1,28 @@
+{
+  "id": "mobile-git",
+  "name": "mobile-git",
+  "title": "移动端 git",
+  "description": "Android、iOS、鸿蒙内置 libgit2 + mbedTLS git 引擎，供 qfli_studio_core 调用，支持 Agent 会话分支",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "lcy",
+  "assignee": "lcy",
+  "createdAt": "2026-11-19",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "11-19-git-ci-validation"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
