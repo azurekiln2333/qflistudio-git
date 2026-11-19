@@ -16,8 +16,9 @@ Nothing under `native/build/` is committed.
 
 libgit2 is used as a static library linked into `libqfli_git.so` and
 `qfli_git.framework`. The libgit2 linking exception allows that combination
-with this project's GPL-3.0-or-later license. The full libgit2 terms sit in
-`native/build/src/libgit2-1.9.7/COPYING` after a fetch.
+with this project's GPL-3.0-or-later license. The full license texts sit in
+`third_party/licenses/` (`libgit2.txt`, `mbedtls.txt`, `cacert.txt`), and CI
+copies them into every artifact.
 
 The CA bundle is copied to `assets/cacert.pem` and shipped inside the Flutter
 plugin, so Android and OpenHarmony do not read the system trust store.
