@@ -1922,6 +1922,30 @@ int qg_log_json(qg_repo *repo, int limit, char **out_json, qg_error *err)
 		goto done;
 	}
 
+	/*
+	 * An unborn HEAD has no commit to walk. git_revwalk_push_head() reports that
+	 * as a missing reference on some libgit2 builds, so decide up front and emit
+	 * an empty history instead of surfacing a bogus error. Real failures below
+	 * keep their libgit2 code and message.
+	 */
+	{
+		int unborn = git_repository_head_unborn(repo->repo);
+
+		if (unborn < 0) {
+			rc = qg_error_libgit2(err, unborn);
+			goto done;
+		}
+		if (unborn == 1) {
+			if (qg_buffer_append(&buffer, "]") < 0) {
+				rc = qg_error_string(err, -1, "out of memory");
+				goto done;
+			}
+			if (qg_buffer_release(&buffer, out_json) < 0)
+				rc = qg_error_string(err, -1, "out of memory");
+			goto done;
+		}
+	}
+
 	rc = git_revwalk_new(&walk, repo->repo);
 	if (rc < 0) {
 		qg_error_libgit2(err, rc);
