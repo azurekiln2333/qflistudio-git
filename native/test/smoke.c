@@ -83,6 +83,35 @@ static int write_text(const char *path, const char *text)
 	return fclose(file) == 0 ? 0 : -1;
 }
 
+static int write_bytes(const char *path, const void *data, size_t size)
+{
+	FILE *file = fopen(path, "wb");
+
+	if (file == NULL)
+		return -1;
+
+	if (size > 0 && fwrite(data, 1, size, file) != size) {
+		fclose(file);
+		return -1;
+	}
+
+	return fclose(file) == 0 ? 0 : -1;
+}
+
+static int count_occurrences(const char *text, const char *needle)
+{
+	size_t length = strlen(needle);
+	int count = 0;
+	const char *cursor = text;
+
+	while ((cursor = strstr(cursor, needle)) != NULL) {
+		count++;
+		cursor += length;
+	}
+
+	return count;
+}
+
 /* Returns a static buffer holding the file content, or NULL. */
 static const char *read_text(const char *path)
 {
@@ -454,6 +483,269 @@ done:
 	return status;
 }
 
+static int test_api_v2(const char *root)
+{
+	char dir[PATH_SIZE];
+	char file_a[PATH_SIZE];
+	char file_b[PATH_SIZE];
+	char file_bin[PATH_SIZE];
+	char file_big[PATH_SIZE];
+	char remote_url[PATH_SIZE];
+	char branch[128];
+	char needle[256];
+	char *json = NULL;
+	qg_repo *repo = NULL;
+	const char *files[2];
+	const char *single[1];
+	const char *bad[1];
+	FILE *big = NULL;
+	int status = -1;
+	int line;
+
+	printf("-- api v2 stage, unstage, diff, log, branches and remotes\n");
+
+	snprintf(dir, sizeof(dir), "%s/api-v2", root);
+	CHECK(qg_repo_init(dir, 0, &repo, &err));
+
+	CHECK(qg_log_json(repo, 10, &json, &err));
+	if (strcmp(json, "[]") != 0) {
+		printf("FAIL unborn log is not empty: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   unborn log is empty\n");
+
+	CHECK(qg_branches_json(repo, &json, &err));
+	if (strcmp(json, "[]") != 0) {
+		printf("FAIL unborn branches are not empty: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   unborn branch list is empty\n");
+
+	CHECK(join_path(file_a, sizeof(file_a), dir, "a.txt"));
+	CHECK(join_path(file_b, sizeof(file_b), dir, "b.txt"));
+	if (write_text(file_a, "one\n") < 0 || write_text(file_b, "bee\n") < 0) {
+		printf("FAIL cannot write initial files\n");
+		goto done;
+	}
+
+	single[0] = "a.txt";
+	CHECK(qg_stage_paths(repo, single, 1, &err));
+
+	CHECK(qg_diff_json(repo, "a.txt", 1, 262144, &json, &err));
+	if (strstr(json, "new file mode") == NULL || strstr(json, "\"binary\":false") == NULL) {
+		printf("FAIL unborn staged diff is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   unborn staged diff shows a new file\n");
+
+	CHECK(qg_unstage_paths(repo, single, 1, &err));
+
+	CHECK(qg_status_json(repo, &json, &err));
+	if (strstr(json, "\"status\":\"worktree_new\"") == NULL) {
+		printf("FAIL unborn unstage did not leave an untracked file: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	if (read_text(file_a) == NULL) {
+		printf("FAIL unborn unstage removed the work tree file\n");
+		goto done;
+	}
+	printf("ok   unborn unstage keeps the work tree file\n");
+
+	bad[0] = "../escape.txt";
+	if (expect_code(qg_stage_paths(repo, bad, 1, &err), QG_EINVALID, "traversal rejected") < 0)
+		goto done;
+
+	files[0] = "a.txt";
+	files[1] = "b.txt";
+	CHECK(qg_stage_paths(repo, files, 2, &err));
+	{
+		char oid[41];
+
+		CHECK(qg_commit(repo, "initial commit", AUTHOR_NAME, AUTHOR_EMAIL, oid, &err));
+	}
+
+	if (head_branch(repo, branch, sizeof(branch)) < 0)
+		goto done;
+
+	CHECK(qg_branches_json(repo, &json, &err));
+	snprintf(needle, sizeof(needle), "\"name\":\"%s\"", branch);
+	if (strstr(json, needle) == NULL || strstr(json, "\"current\":true") == NULL) {
+		printf("FAIL branches json is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   branches json marks the current branch\n");
+
+	CHECK(qg_log_json(repo, 10, &json, &err));
+	if (strstr(json, "\"message\":\"initial commit\"") == NULL ||
+	    strstr(json, "\"authorName\":\"Qfli Git Smoke\"") == NULL ||
+	    strstr(json, "\"authorEmail\":\"smoke@qfli.invalid\"") == NULL ||
+	    strstr(json, "\"time\":") == NULL) {
+		printf("FAIL log json is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   log json carries commit metadata\n");
+
+	if (write_text(file_a, "two\n") < 0 || remove(file_b) != 0) {
+		printf("FAIL cannot modify a.txt or delete b.txt\n");
+		goto done;
+	}
+
+	CHECK(qg_stage_paths(repo, files, 2, &err));
+
+	CHECK(qg_diff_json(repo, "a.txt", 1, 262144, &json, &err));
+	if (strstr(json, "\"patch\":\"diff --git") == NULL ||
+	    strstr(json, "\"binary\":false") == NULL) {
+		printf("FAIL staged modification diff is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+
+	CHECK(qg_diff_json(repo, "b.txt", 1, 262144, &json, &err));
+	if (strstr(json, "deleted file mode") == NULL ||
+	    strstr(json, "\"truncated\":false") == NULL) {
+		printf("FAIL staged deletion diff is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   staged diff renders modification and deletion\n");
+
+	CHECK(qg_unstage_paths(repo, files, 2, &err));
+
+	CHECK(qg_diff_json(repo, "b.txt", 1, 262144, &json, &err));
+	if (strstr(json, "\"patch\":\"\"") == NULL) {
+		printf("FAIL unstage did not reset the index: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+
+	CHECK(qg_status_json(repo, &json, &err));
+	if (strstr(json, "\"status\":\"worktree_modified\"") == NULL ||
+	    strstr(json, "\"status\":\"worktree_deleted\"") == NULL) {
+		printf("FAIL unstage did not preserve the work tree: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+
+	if (read_text(file_a) == NULL || strcmp(read_text(file_a), "two\n") != 0) {
+		printf("FAIL unstage changed a.txt\n");
+		goto done;
+	}
+	if (read_text(file_b) != NULL) {
+		printf("FAIL unstage restored the deleted b.txt\n");
+		goto done;
+	}
+	printf("ok   unstage preserves work tree changes\n");
+
+	CHECK(qg_stage_paths(repo, files, 2, &err));
+	{
+		char oid[41];
+
+		CHECK(qg_commit(repo, "second commit", AUTHOR_NAME, AUTHOR_EMAIL, oid, &err));
+	}
+
+	CHECK(join_path(file_bin, sizeof(file_bin), dir, "bin.dat"));
+	{
+		const char binary_data[] = { 'a', '\0', 'b', '\0', '\n' };
+
+		if (write_bytes(file_bin, binary_data, sizeof(binary_data)) < 0) {
+			printf("FAIL cannot write bin.dat\n");
+			goto done;
+		}
+	}
+	single[0] = "bin.dat";
+	CHECK(qg_stage_paths(repo, single, 1, &err));
+	CHECK(qg_diff_json(repo, "bin.dat", 1, 262144, &json, &err));
+	if (strstr(json, "\"binary\":true") == NULL) {
+		printf("FAIL binary diff is not labelled: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   binary diff is labelled\n");
+
+	CHECK(join_path(file_big, sizeof(file_big), dir, "big.txt"));
+	big = fopen(file_big, "wb");
+	if (big == NULL) {
+		printf("FAIL cannot write big.txt\n");
+		goto done;
+	}
+	for (line = 0; line < 200; line++) {
+		if (fprintf(big, "line %03d abcdefghijklmnopqrstuvwxyz\n", line) < 0) {
+			printf("FAIL cannot write big.txt\n");
+			goto done;
+		}
+	}
+	if (fclose(big) != 0) {
+		big = NULL;
+		printf("FAIL cannot close big.txt\n");
+		goto done;
+	}
+	big = NULL;
+
+	single[0] = "big.txt";
+	CHECK(qg_stage_paths(repo, single, 1, &err));
+	CHECK(qg_diff_json(repo, "big.txt", 1, 128, &json, &err));
+	if (strstr(json, "\"truncated\":true") == NULL || strlen(json) > 4096) {
+		printf("FAIL bounded diff is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   diff is truncated at the byte bound\n");
+
+	snprintf(remote_url, sizeof(remote_url), "%s/remote.git", root);
+	CHECK(qg_remote_set_url(repo, "origin", remote_url, &err));
+	CHECK(qg_remotes_json(repo, &json, &err));
+	if (strstr(json, "\"name\":\"origin\"") == NULL || strstr(json, remote_url) == NULL) {
+		printf("FAIL remotes json is wrong: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+
+	if (expect_code(qg_remote_set_url(repo, "origin",
+	                                  "https://user:secret@example.com/repo.git", &err),
+	                QG_EINVALID, "credential URL rejected") < 0)
+		goto done;
+
+	CHECK(qg_remote_set_url(repo, "origin", remote_url, &err));
+	printf("ok   remotes json and url updates work\n");
+
+	CHECK(qg_log_json(repo, 1, &json, &err));
+	if (count_occurrences(json, "\"oid\":") != 1) {
+		printf("FAIL log limit was not honoured: %s\n", json);
+		goto done;
+	}
+	qg_string_free(json);
+	json = NULL;
+	printf("ok   log limit is honoured\n");
+
+	status = 0;
+
+done:
+	qg_string_free(json);
+	if (big != NULL)
+		fclose(big);
+	qg_repo_free(repo);
+	return status;
+}
+
 static int test_https(const char *root, const char *url)
 {
 	char target[PATH_SIZE];
@@ -537,6 +829,12 @@ int main(int argc, char **argv)
 
 	if (test_local(root) < 0) {
 		printf("FAIL local flow failed, directory kept for inspection\n");
+		qg_shutdown();
+		return 1;
+	}
+
+	if (test_api_v2(root) < 0) {
+		printf("FAIL api v2 flow failed, directory kept for inspection\n");
 		qg_shutdown();
 		return 1;
 	}

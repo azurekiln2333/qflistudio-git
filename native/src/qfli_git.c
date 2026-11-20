@@ -111,21 +111,28 @@ static int qg_buffer_reserve(qg_buffer *buf, size_t extra)
 	return 0;
 }
 
-static int qg_buffer_append(qg_buffer *buf, const char *text)
+/* Append exactly length bytes, so callers can accumulate binary-safe text. */
+static int qg_buffer_append_bytes(qg_buffer *buf, const char *data, size_t length)
 {
-	size_t length;
-
-	if (text == NULL)
+	if (length == 0)
 		return 0;
-
-	length = strlen(text);
+	if (data == NULL)
+		return 0;
 	if (qg_buffer_reserve(buf, length) < 0)
 		return -1;
 
-	memcpy(buf->data + buf->length, text, length);
+	memcpy(buf->data + buf->length, data, length);
 	buf->length += length;
 	buf->data[buf->length] = '\0';
 	return 0;
+}
+
+static int qg_buffer_append(qg_buffer *buf, const char *text)
+{
+	if (text == NULL)
+		return 0;
+
+	return qg_buffer_append_bytes(buf, text, strlen(text));
 }
 
 static int qg_buffer_append_json_string(qg_buffer *buf, const char *text)
@@ -175,6 +182,67 @@ static int qg_buffer_append_json_string(qg_buffer *buf, const char *text)
 	}
 
 	return qg_buffer_append(buf, "\"");
+}
+
+/* Append exactly length bytes as a JSON string, including embedded NUL. */
+static int qg_buffer_append_json_bytes(qg_buffer *buf, const char *data, size_t length)
+{
+	const unsigned char *cursor = (const unsigned char *)data;
+	size_t index;
+
+	if (qg_buffer_append(buf, "\"") < 0)
+		return -1;
+
+	for (index = 0; index < length; index++) {
+		unsigned char byte = cursor[index];
+		char escaped[8];
+
+		switch (byte) {
+		case '"':
+			if (qg_buffer_append(buf, "\\\"") < 0)
+				return -1;
+			break;
+		case '\\':
+			if (qg_buffer_append(buf, "\\\\") < 0)
+				return -1;
+			break;
+		case '\n':
+			if (qg_buffer_append(buf, "\\n") < 0)
+				return -1;
+			break;
+		case '\r':
+			if (qg_buffer_append(buf, "\\r") < 0)
+				return -1;
+			break;
+		case '\t':
+			if (qg_buffer_append(buf, "\\t") < 0)
+				return -1;
+			break;
+		default:
+			if (byte < 0x20) {
+				snprintf(escaped, sizeof(escaped), "\\u%04x", byte);
+				if (qg_buffer_append(buf, escaped) < 0)
+					return -1;
+			} else {
+				if (qg_buffer_reserve(buf, 1) < 0)
+					return -1;
+				buf->data[buf->length++] = (char)byte;
+				buf->data[buf->length] = '\0';
+			}
+			break;
+		}
+	}
+
+	return qg_buffer_append(buf, "\"");
+}
+
+/* Round length down so a UTF-8 multibyte character is never split. */
+static size_t qg_utf8_boundary(const char *data, size_t length)
+{
+	while (length > 0 && ((unsigned char)data[length] & 0xc0) == 0x80)
+		length--;
+
+	return length;
 }
 
 static void qg_buffer_dispose(qg_buffer *buf)
@@ -510,6 +578,241 @@ int qg_add_all(qg_repo *repo, qg_error *err)
 
 	git_index_free(index);
 	return qg_result(rc, NULL, err);
+}
+
+/*
+ * Accept only literal repository-relative file paths. Rejecting traversal,
+ * drive prefixes, backslashes and empty components keeps the index APIs from
+ * escaping the work tree or interpreting wildcard syntax.
+ */
+static int qg_validate_relative_path(const char *path, qg_error *err)
+{
+	const char *cursor;
+	size_t length;
+
+	if (path == NULL || path[0] == '\0')
+		return qg_invalid(err, "path is required");
+
+	if (path[0] == '/' || path[0] == '\\')
+		return qg_invalid(err, "path must be relative to the repository");
+
+	if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
+	    path[1] == ':')
+		return qg_invalid(err, "path must not have a drive prefix");
+
+	if (strchr(path, '\\') != NULL)
+		return qg_invalid(err, "path must use forward slashes");
+
+	length = strlen(path);
+	if (path[length - 1] == '/')
+		return qg_invalid(err, "path must name a file");
+
+	for (cursor = path; *cursor != '\0';) {
+		const char *slash = strchr(cursor, '/');
+		size_t part = slash != NULL ? (size_t)(slash - cursor) : strlen(cursor);
+
+		if (part == 0)
+			return qg_invalid(err, "path has an empty component");
+		if ((part == 1 && cursor[0] == '.') ||
+		    (part == 2 && cursor[0] == '.' && cursor[1] == '.'))
+			return qg_invalid(err, "path traversal is not allowed");
+
+		if (slash == NULL)
+			break;
+		cursor = slash + 1;
+	}
+
+	return 0;
+}
+
+static int qg_index_stage_path(git_index *index, const char *path, qg_error *err)
+{
+	int rc;
+
+	rc = git_index_add_bypath(index, path);
+	if (rc == GIT_ENOTFOUND) {
+		const git_index_entry *existing = git_index_get_bypath(index, path, 0);
+
+		if (existing == NULL)
+			return qg_invalid(err, "path does not exist in the work tree or index");
+
+		/* The tracked file is gone from the work tree: stage the deletion. */
+		rc = git_index_remove_bypath(index, path);
+		if (rc == GIT_ENOTFOUND)
+			rc = 0;
+	}
+
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	return 0;
+}
+
+int qg_stage_paths(qg_repo *repo, const char **paths, int count, qg_error *err)
+{
+	git_index *index = NULL;
+	int rc;
+	int index_path;
+
+	if (repo == NULL)
+		return qg_invalid(err, "repo is required");
+	if (count < 0)
+		return qg_invalid(err, "count must not be negative");
+	if (count > 0 && paths == NULL)
+		return qg_invalid(err, "paths are required");
+	if (count == 0)
+		return 0;
+
+	for (index_path = 0; index_path < count; index_path++) {
+		rc = qg_validate_relative_path(paths[index_path], err);
+		if (rc < 0)
+			return rc;
+	}
+
+	rc = git_repository_index(&index, repo->repo);
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	for (index_path = 0; index_path < count; index_path++) {
+		rc = qg_index_stage_path(index, paths[index_path], err);
+		if (rc < 0) {
+			git_index_free(index);
+			return rc;
+		}
+	}
+
+	rc = git_index_write(index);
+	git_index_free(index);
+
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	return 0;
+}
+
+/*
+ * Resolve the tree of HEAD. An unborn or missing HEAD yields a NULL tree so
+ * callers can treat the repository as empty. git_repository_head_tree is not a
+ * public libgit2 API, so peel the owned HEAD reference instead.
+ */
+static int qg_head_tree(git_tree **out, git_repository *repository, qg_error *err)
+{
+	git_reference *head = NULL;
+	git_object *peeled = NULL;
+	int rc;
+
+	*out = NULL;
+
+	rc = git_repository_head(&head, repository);
+	if (rc == GIT_EUNBORNBRANCH || rc == GIT_ENOTFOUND) {
+		git_reference_free(head);
+		return 0;
+	}
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	rc = git_reference_peel(&peeled, head, GIT_OBJECT_TREE);
+	git_reference_free(head);
+	if (rc == GIT_EUNBORNBRANCH || rc == GIT_ENOTFOUND) {
+		git_object_free(peeled);
+		return 0;
+	}
+	if (rc < 0) {
+		git_object_free(peeled);
+		return qg_error_libgit2(err, rc);
+	}
+
+	*out = (git_tree *)peeled;
+	return 0;
+}
+
+static int qg_index_unstage_path(git_index *index, const git_tree *head_tree,
+                                 const char *path, qg_error *err)
+{
+	git_tree_entry *tree_entry = NULL;
+	git_index_entry entry;
+	int rc;
+
+	rc = git_index_conflict_remove(index, path);
+	if (rc < 0 && rc != GIT_ENOTFOUND)
+		return qg_error_libgit2(err, rc);
+
+	if (head_tree != NULL) {
+		rc = git_tree_entry_bypath(&tree_entry, head_tree, path);
+		if (rc == 0) {
+			memset(&entry, 0, sizeof(entry));
+			entry.path = (char *)path;
+			entry.mode = git_tree_entry_filemode(tree_entry);
+			git_oid_cpy(&entry.id, git_tree_entry_id(tree_entry));
+
+			rc = git_index_add(index, &entry);
+			git_tree_entry_free(tree_entry);
+			if (rc < 0)
+				return qg_error_libgit2(err, rc);
+			return 0;
+		}
+		if (rc != GIT_ENOTFOUND)
+			return qg_error_libgit2(err, rc);
+	}
+
+	/* No HEAD entry (unborn branch or newly added path): drop it from the
+	 * index only. The work tree file itself is never touched. */
+	rc = git_index_remove_bypath(index, path);
+	if (rc < 0 && rc != GIT_ENOTFOUND)
+		return qg_error_libgit2(err, rc);
+
+	return 0;
+}
+
+int qg_unstage_paths(qg_repo *repo, const char **paths, int count, qg_error *err)
+{
+	git_index *index = NULL;
+	git_tree *head_tree = NULL;
+	int rc;
+	int index_path;
+
+	if (repo == NULL)
+		return qg_invalid(err, "repo is required");
+	if (count < 0)
+		return qg_invalid(err, "count must not be negative");
+	if (count > 0 && paths == NULL)
+		return qg_invalid(err, "paths are required");
+	if (count == 0)
+		return 0;
+
+	for (index_path = 0; index_path < count; index_path++) {
+		rc = qg_validate_relative_path(paths[index_path], err);
+		if (rc < 0)
+			return rc;
+	}
+
+	rc = git_repository_index(&index, repo->repo);
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	rc = qg_head_tree(&head_tree, repo->repo, err);
+	if (rc < 0) {
+		git_index_free(index);
+		return rc;
+	}
+
+	for (index_path = 0; index_path < count; index_path++) {
+		rc = qg_index_unstage_path(index, head_tree, paths[index_path], err);
+		if (rc < 0) {
+			git_tree_free(head_tree);
+			git_index_free(index);
+			return rc;
+		}
+	}
+
+	rc = git_index_write(index);
+	git_tree_free(head_tree);
+	git_index_free(index);
+
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	return 0;
 }
 
 static int qg_index_tree(git_tree **out, git_index *index, git_repository *repository,
@@ -1350,9 +1653,11 @@ int qg_head_json(qg_repo *repo, char **out_json, qg_error *err)
 		}
 
 		git_reference_free(head);
-	} else if (rc == GIT_EUNBORNBRANCH) {
+	} else if (rc == GIT_EUNBORNBRANCH || rc == GIT_ENOTFOUND) {
 		git_reference *symbolic = NULL;
 
+		/* An unborn or missing HEAD is an empty repository, not a failure. */
+		rc = 0;
 		branch[0] = '\0';
 		if (git_reference_lookup(&symbolic, repo->repo, "HEAD") == 0) {
 			const char *target = git_reference_symbolic_target(symbolic);
@@ -1388,6 +1693,554 @@ int qg_head_json(qg_repo *repo, char **out_json, qg_error *err)
 done:
 	qg_buffer_dispose(&buffer);
 	return rc;
+}
+
+#define QG_DIFF_DEFAULT_BYTES 262144
+#define QG_DIFF_MAX_BYTES (4 * 1024 * 1024)
+#define QG_LOG_DEFAULT_LIMIT 20
+#define QG_LOG_MAX_LIMIT 500
+
+typedef struct {
+	qg_buffer *buffer;
+	size_t bound;
+	int truncated;
+	int failed;
+	int binary;
+} qg_diff_sink;
+
+/* Append at most the remaining bound. Returns -1 on allocation failure. */
+static int qg_diff_sink_append(qg_diff_sink *sink, const char *data, size_t length)
+{
+	size_t take;
+
+	if (sink->truncated)
+		return 0;
+
+	if (sink->buffer->length >= sink->bound) {
+		sink->truncated = 1;
+		return 0;
+	}
+
+	take = length;
+	if (take > sink->bound - sink->buffer->length) {
+		take = sink->bound - sink->buffer->length;
+		take = qg_utf8_boundary(data, take);
+		sink->truncated = 1;
+	}
+
+	if (take > 0 && qg_buffer_append_bytes(sink->buffer, data, take) < 0) {
+		sink->failed = 1;
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Copy one printed diff line into the sink. A nonzero return stops printing, so
+ * a huge file never produces a full in-memory patch before the bound applies.
+ * git_diff_line content omits the leading origin byte for context, addition and
+ * deletion lines, so that byte is written first like libgit2's own buffer
+ * printer does.
+ */
+static int qg_diff_print_cb(const git_diff_delta *delta, const git_diff_hunk *hunk,
+                            const git_diff_line *line, void *payload)
+{
+	qg_diff_sink *sink = (qg_diff_sink *)payload;
+	int rc = 0;
+
+	(void)delta;
+	(void)hunk;
+
+	if (line->origin == GIT_DIFF_LINE_BINARY)
+		sink->binary = 1;
+
+	if (line->origin == GIT_DIFF_LINE_CONTEXT ||
+	    line->origin == GIT_DIFF_LINE_ADDITION ||
+	    line->origin == GIT_DIFF_LINE_DELETION) {
+		const char origin = line->origin;
+
+		rc = qg_diff_sink_append(sink, &origin, 1);
+	}
+
+	if (rc == 0)
+		rc = qg_diff_sink_append(sink, line->content, line->content_len);
+
+	if (rc < 0)
+		return -1;
+
+	return sink->truncated ? 1 : 0;
+}
+
+int qg_diff_json(qg_repo *repo, const char *path, int staged, int max_bytes,
+                 char **out_json, qg_error *err)
+{
+	git_diff_options options = GIT_DIFF_OPTIONS_INIT;
+	git_diff *diff = NULL;
+	git_tree *head_tree = NULL;
+	qg_buffer buffer;
+	qg_buffer body;
+	qg_diff_sink sink;
+	char *path_items[1];
+	size_t bound;
+	size_t delta_count;
+	size_t index;
+	int binary = 0;
+	int truncated = 0;
+	int rc = 0;
+
+	if (repo == NULL || out_json == NULL)
+		return qg_invalid(err, "repo and out_json are required");
+	if (path != NULL) {
+		rc = qg_validate_relative_path(path, err);
+		if (rc < 0)
+			return rc;
+	}
+
+	*out_json = NULL;
+	memset(&buffer, 0, sizeof(buffer));
+	memset(&body, 0, sizeof(body));
+
+	if (max_bytes > 0)
+		bound = (size_t)max_bytes;
+	else
+		bound = QG_DIFF_DEFAULT_BYTES;
+	if (bound > QG_DIFF_MAX_BYTES)
+		bound = QG_DIFF_MAX_BYTES;
+
+	options.flags = GIT_DIFF_INCLUDE_TYPECHANGE | GIT_DIFF_DISABLE_PATHSPEC_MATCH |
+	                GIT_DIFF_SHOW_UNTRACKED_CONTENT;
+	if (!staged)
+		options.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS;
+
+	if (path != NULL) {
+		path_items[0] = (char *)path;
+		options.pathspec.strings = path_items;
+		options.pathspec.count = 1;
+	}
+
+	if (staged) {
+		rc = qg_head_tree(&head_tree, repo->repo, err);
+		if (rc < 0)
+			goto done;
+
+		rc = git_diff_tree_to_index(&diff, repo->repo, head_tree, NULL, &options);
+	} else {
+		rc = git_diff_index_to_workdir(&diff, repo->repo, NULL, &options);
+	}
+
+	if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	}
+
+	delta_count = git_diff_num_deltas(diff);
+
+	/* Mark binary output from delta flags. Patch text is generated once below. */
+	for (index = 0; index < delta_count; index++) {
+		const git_diff_delta *delta = git_diff_get_delta(diff, index);
+
+		if (delta != NULL && (delta->flags & GIT_DIFF_FLAG_BINARY) != 0) {
+			binary = 1;
+			break;
+		}
+	}
+
+	/* One bounded print pass: stop as soon as the requested byte bound is met. */
+	memset(&sink, 0, sizeof(sink));
+	sink.buffer = &body;
+	sink.bound = bound;
+
+	rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, qg_diff_print_cb, &sink);
+	if (sink.failed) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+	/* A positive return is our own stop signal once the bound is reached. */
+	if (rc > 0)
+		rc = 0;
+	if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	}
+	truncated = sink.truncated;
+	if (sink.binary)
+		binary = 1;
+
+	/* Encode the accumulated patch text once, including the empty string. */
+	if (qg_buffer_append(&buffer, "{\"patch\":") < 0 ||
+	    qg_buffer_append_json_bytes(&buffer, body.data != NULL ? body.data : "", body.length) < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	if (qg_buffer_append(&buffer, ",\"binary\":") < 0 ||
+	    qg_buffer_append(&buffer, binary ? "true" : "false") < 0 ||
+	    qg_buffer_append(&buffer, ",\"truncated\":") < 0 ||
+	    qg_buffer_append(&buffer, truncated ? "true" : "false") < 0 ||
+	    qg_buffer_append(&buffer, "}") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	if (qg_buffer_release(&buffer, out_json) < 0)
+		rc = qg_error_string(err, -1, "out of memory");
+
+done:
+	if (diff != NULL)
+		git_diff_free(diff);
+	if (head_tree != NULL)
+		git_tree_free(head_tree);
+	qg_buffer_dispose(&body);
+	qg_buffer_dispose(&buffer);
+	return rc;
+}
+
+int qg_log_json(qg_repo *repo, int limit, char **out_json, qg_error *err)
+{
+	git_revwalk *walk = NULL;
+	qg_buffer buffer;
+	size_t maximum;
+	size_t count = 0;
+	int rc = 0;
+
+	if (repo == NULL || out_json == NULL)
+		return qg_invalid(err, "repo and out_json are required");
+
+	*out_json = NULL;
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (limit <= 0)
+		maximum = QG_LOG_DEFAULT_LIMIT;
+	else
+		maximum = (size_t)limit;
+	if (maximum > QG_LOG_MAX_LIMIT)
+		maximum = QG_LOG_MAX_LIMIT;
+
+	if (qg_buffer_append(&buffer, "[") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	rc = git_revwalk_new(&walk, repo->repo);
+	if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	}
+
+	git_revwalk_sorting(walk, GIT_SORT_TIME);
+
+	rc = git_revwalk_push_head(walk);
+	if (rc == GIT_EUNBORNBRANCH || rc == GIT_ENOTFOUND) {
+		rc = 0;
+	} else if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	} else {
+		while (count < maximum) {
+			git_oid oid;
+			git_commit *commit = NULL;
+			const git_signature *author;
+			const char *message;
+			char oid_hex[GIT_OID_SHA1_HEXSIZE + 1];
+			char time_text[32];
+			size_t message_length;
+
+			rc = git_revwalk_next(&oid, walk);
+			if (rc == GIT_ITEROVER) {
+				rc = 0;
+				break;
+			}
+			if (rc < 0) {
+				qg_error_libgit2(err, rc);
+				goto done;
+			}
+
+			rc = git_commit_lookup(&commit, repo->repo, &oid);
+			if (rc < 0) {
+				qg_error_libgit2(err, rc);
+				goto done;
+			}
+
+			author = git_commit_author(commit);
+			message = git_commit_message(commit);
+			message_length = message != NULL ? strlen(message) : 0;
+			while (message_length > 0 &&
+			       (message[message_length - 1] == '\n' ||
+			        message[message_length - 1] == '\r'))
+				message_length--;
+			git_oid_tostr(oid_hex, sizeof(oid_hex), &oid);
+			snprintf(time_text, sizeof(time_text), "%lld",
+			         (long long)git_commit_time(commit));
+
+			if ((count > 0 && qg_buffer_append(&buffer, ",") < 0) ||
+			    qg_buffer_append(&buffer, "{\"oid\":\"") < 0 ||
+			    qg_buffer_append(&buffer, oid_hex) < 0 ||
+			    qg_buffer_append(&buffer, "\",\"message\":") < 0 ||
+			    qg_buffer_append_json_bytes(&buffer, message != NULL ? message : "",
+			                                message_length) < 0 ||
+			    qg_buffer_append(&buffer, ",\"authorName\":") < 0 ||
+			    qg_buffer_append_json_string(
+			        &buffer, author != NULL && author->name != NULL ? author->name : "") < 0 ||
+			    qg_buffer_append(&buffer, ",\"authorEmail\":") < 0 ||
+			    qg_buffer_append_json_string(
+			        &buffer, author != NULL && author->email != NULL ? author->email : "") < 0 ||
+			    qg_buffer_append(&buffer, ",\"time\":") < 0 ||
+			    qg_buffer_append(&buffer, time_text) < 0 ||
+			    qg_buffer_append(&buffer, "}") < 0) {
+				git_commit_free(commit);
+				rc = qg_error_string(err, -1, "out of memory");
+				goto done;
+			}
+
+			git_commit_free(commit);
+			count++;
+		}
+	}
+
+	if (qg_buffer_append(&buffer, "]") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	if (qg_buffer_release(&buffer, out_json) < 0)
+		rc = qg_error_string(err, -1, "out of memory");
+
+done:
+	if (walk != NULL)
+		git_revwalk_free(walk);
+	qg_buffer_dispose(&buffer);
+	return rc;
+}
+
+int qg_branches_json(qg_repo *repo, char **out_json, qg_error *err)
+{
+	git_branch_iterator *iterator = NULL;
+	git_reference *head = NULL;
+	const char *head_target = NULL;
+	qg_buffer buffer;
+	int first = 1;
+	int rc = 0;
+
+	if (repo == NULL || out_json == NULL)
+		return qg_invalid(err, "repo and out_json are required");
+
+	*out_json = NULL;
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (git_reference_lookup(&head, repo->repo, "HEAD") == 0)
+		head_target = git_reference_symbolic_target(head);
+
+	if (qg_buffer_append(&buffer, "[") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	rc = git_branch_iterator_new(&iterator, repo->repo, GIT_BRANCH_ALL);
+	if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	}
+
+	for (;;) {
+		git_reference *reference = NULL;
+		git_reference *upstream = NULL;
+		git_branch_t type;
+		const char *name = NULL;
+		const char *upstream_name = NULL;
+		int current = 0;
+		int remote;
+
+		rc = git_branch_next(&reference, &type, iterator);
+		if (rc == GIT_ITEROVER) {
+			rc = 0;
+			break;
+		}
+		if (rc < 0) {
+			qg_error_libgit2(err, rc);
+			goto done;
+		}
+
+		rc = git_branch_name(&name, reference);
+		if (rc < 0) {
+			git_reference_free(reference);
+			qg_error_libgit2(err, rc);
+			goto done;
+		}
+		if (name == NULL) {
+			git_reference_free(reference);
+			rc = qg_error_string(err, -1, "branch has no name");
+			goto done;
+		}
+
+		remote = type == GIT_BRANCH_REMOTE;
+		if (head_target != NULL &&
+		    strcmp(git_reference_name(reference), head_target) == 0)
+			current = 1;
+
+		if (!remote) {
+			rc = git_branch_upstream(&upstream, reference);
+			if (rc == 0) {
+				if (git_branch_name(&upstream_name, upstream) < 0)
+					upstream_name = NULL;
+			} else if (rc == GIT_ENOTFOUND) {
+				rc = 0;
+			} else {
+				git_reference_free(upstream);
+				git_reference_free(reference);
+				qg_error_libgit2(err, rc);
+				goto done;
+			}
+		}
+
+		if ((!first && qg_buffer_append(&buffer, ",") < 0) ||
+		    qg_buffer_append(&buffer, "{\"name\":") < 0 ||
+		    qg_buffer_append_json_string(&buffer, name) < 0 ||
+		    qg_buffer_append(&buffer, ",\"current\":") < 0 ||
+		    qg_buffer_append(&buffer, current ? "true" : "false") < 0 ||
+		    qg_buffer_append(&buffer, ",\"remote\":") < 0 ||
+		    qg_buffer_append(&buffer, remote ? "true" : "false") < 0 ||
+		    qg_buffer_append(&buffer, ",\"upstream\":") < 0 ||
+		    (upstream_name != NULL
+		         ? qg_buffer_append_json_string(&buffer, upstream_name)
+		         : qg_buffer_append(&buffer, "null")) < 0 ||
+		    qg_buffer_append(&buffer, "}") < 0) {
+			git_reference_free(upstream);
+			git_reference_free(reference);
+			rc = qg_error_string(err, -1, "out of memory");
+			goto done;
+		}
+
+		first = 0;
+		git_reference_free(upstream);
+		git_reference_free(reference);
+	}
+
+	if (qg_buffer_append(&buffer, "]") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	if (qg_buffer_release(&buffer, out_json) < 0)
+		rc = qg_error_string(err, -1, "out of memory");
+
+done:
+	git_reference_free(head);
+	if (iterator != NULL)
+		git_branch_iterator_free(iterator);
+	qg_buffer_dispose(&buffer);
+	return rc;
+}
+
+int qg_remotes_json(qg_repo *repo, char **out_json, qg_error *err)
+{
+	git_strarray remotes = {0};
+	qg_buffer buffer;
+	size_t index;
+	int rc = 0;
+
+	if (repo == NULL || out_json == NULL)
+		return qg_invalid(err, "repo and out_json are required");
+
+	*out_json = NULL;
+	memset(&buffer, 0, sizeof(buffer));
+
+	rc = git_remote_list(&remotes, repo->repo);
+	if (rc < 0) {
+		qg_error_libgit2(err, rc);
+		goto done;
+	}
+
+	if (qg_buffer_append(&buffer, "[") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	for (index = 0; index < remotes.count; index++) {
+		git_remote *remote = NULL;
+		const char *url;
+
+		rc = git_remote_lookup(&remote, repo->repo, remotes.strings[index]);
+		if (rc < 0) {
+			qg_error_libgit2(err, rc);
+			goto done;
+		}
+
+		url = git_remote_url(remote);
+
+		if ((index > 0 && qg_buffer_append(&buffer, ",") < 0) ||
+		    qg_buffer_append(&buffer, "{\"name\":") < 0 ||
+		    qg_buffer_append_json_string(&buffer, remotes.strings[index]) < 0 ||
+		    qg_buffer_append(&buffer, ",\"url\":") < 0 ||
+		    qg_buffer_append_json_string(&buffer, url != NULL ? url : "") < 0 ||
+		    qg_buffer_append(&buffer, "}") < 0) {
+			git_remote_free(remote);
+			rc = qg_error_string(err, -1, "out of memory");
+			goto done;
+		}
+
+		git_remote_free(remote);
+	}
+
+	if (qg_buffer_append(&buffer, "]") < 0) {
+		rc = qg_error_string(err, -1, "out of memory");
+		goto done;
+	}
+
+	if (qg_buffer_release(&buffer, out_json) < 0)
+		rc = qg_error_string(err, -1, "out of memory");
+
+done:
+	git_strarray_dispose(&remotes);
+	qg_buffer_dispose(&buffer);
+	return rc;
+}
+
+static int qg_url_has_credentials(const char *url)
+{
+	const char *scheme = strstr(url, "://");
+	const char *authority;
+	const char *end;
+
+	if (scheme == NULL)
+		return 0;
+
+	authority = scheme + 3;
+	end = authority + strcspn(authority, "/?#");
+
+	while (authority < end) {
+		if (*authority == '@')
+			return 1;
+		authority++;
+	}
+
+	return 0;
+}
+
+int qg_remote_set_url(qg_repo *repo, const char *name, const char *url, qg_error *err)
+{
+	git_remote *remote = NULL;
+	int rc;
+
+	if (repo == NULL || name == NULL || name[0] == '\0' || url == NULL || url[0] == '\0')
+		return qg_invalid(err, "repo, name and url are required");
+
+	if (qg_url_has_credentials(url))
+		return qg_invalid(err, "remote URL must not contain credentials");
+
+	rc = git_remote_lookup(&remote, repo->repo, name);
+	if (rc == 0) {
+		git_remote_free(remote);
+		rc = git_remote_set_url(repo->repo, name, url);
+	} else if (rc == GIT_ENOTFOUND) {
+		rc = git_remote_create(&remote, repo->repo, name, url);
+		git_remote_free(remote);
+	}
+
+	if (rc < 0)
+		return qg_error_libgit2(err, rc);
+
+	return 0;
 }
 
 void qg_string_free(char *s)

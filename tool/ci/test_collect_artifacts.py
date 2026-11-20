@@ -27,7 +27,13 @@ Program Headers:
 
 READELF_UNALIGNED = READELF_ALIGNED.replace("0x04a1b0 R E 0x4000", "0x04a1b0 R E 0x1000")
 
+CONTRACT = {
+    "apiVersion": 2,
+    "requiredExports": ["qg_api_version", "qg_add_all", "qg_clone", "qg_commit"],
+}
+
 NM_EXPORTS = """\
+0000000000012330 T qg_api_version
 0000000000012340 T qg_add_all
 0000000000012400 T qg_clone
 0000000000012500 T qg_commit
@@ -54,6 +60,8 @@ def elf_arguments(directory: Path, readelf: str, nm: str) -> list[str]:
         nm,
         "--versions",
         str(directory / "versions.json"),
+        "--contract",
+        str(directory / "native_contract.json"),
         "--repo-root",
         str(directory),
         "--commit",
@@ -86,7 +94,10 @@ class AlignmentTests(unittest.TestCase):
 class ExportTests(unittest.TestCase):
     def test_qg_exports_pass(self) -> None:
         symbols = collect.parse_defined_symbols(NM_EXPORTS)
-        self.assertEqual(symbols, ["qg_add_all", "qg_clone", "qg_commit"])
+        self.assertEqual(
+            symbols,
+            ["qg_api_version", "qg_add_all", "qg_clone", "qg_commit"],
+        )
         collect.check_exports(symbols)
 
     def test_foreign_export_fails(self) -> None:
@@ -97,13 +108,15 @@ class ExportTests(unittest.TestCase):
     def test_underscore_symbols_are_ignored(self) -> None:
         output = NM_EXPORTS + "0000000000012700 T __stack_chk_fail\n"
         self.assertEqual(
-            collect.parse_defined_symbols(output), ["qg_add_all", "qg_clone", "qg_commit"]
+            collect.parse_defined_symbols(output),
+            ["qg_api_version", "qg_add_all", "qg_clone", "qg_commit"],
         )
 
     def test_version_node_symbols_are_ignored(self) -> None:
         output = NM_EXPORTS + "0000000000000000 A QFLI_GIT_1.0\n"
         self.assertEqual(
-            collect.parse_defined_symbols(output), ["qg_add_all", "qg_clone", "qg_commit"]
+            collect.parse_defined_symbols(output),
+            ["qg_api_version", "qg_add_all", "qg_clone", "qg_commit"],
         )
 
     def test_no_export_fails(self) -> None:
@@ -119,14 +132,14 @@ class VersionTests(unittest.TestCase):
                 json.dumps(
                     {
                         "libgit2": {"version": "1.9.7", "url": "u", "sha256": "s"},
-                        "mbedtls": {"version": "3.6.4"},
+                        "mbedtls": {"version": "3.6.8"},
                     }
                 ),
                 encoding="utf-8",
             )
             self.assertEqual(
                 collect.load_upstream_versions(path),
-                {"libgit2": "1.9.7", "mbedtls": "3.6.4"},
+                {"libgit2": "1.9.7", "mbedtls": "3.6.8"},
             )
 
     def test_list_file(self) -> None:
@@ -152,8 +165,11 @@ class VersionTests(unittest.TestCase):
 class CollectTests(unittest.TestCase):
     def prepare(self, directory: Path) -> None:
         (directory / "versions.json").write_text(
-            json.dumps({"libgit2": {"version": "1.9.7"}, "mbedtls": {"version": "3.6.4"}}),
+            json.dumps({"libgit2": {"version": "1.9.7"}, "mbedtls": {"version": "3.6.8"}}),
             encoding="utf-8",
+        )
+        (directory / "native_contract.json").write_text(
+            json.dumps(CONTRACT) + "\n", encoding="utf-8"
         )
         (directory / "LICENSE").write_text("GPL-3.0-or-later\n", encoding="utf-8")
         licenses = directory / "third_party/licenses"
@@ -179,8 +195,12 @@ class CollectTests(unittest.TestCase):
             manifest = json.loads(
                 (directory / "artifacts/manifest.json").read_text(encoding="utf-8")
             )
+            self.assertEqual(manifest["schemaVersion"], 2)
             self.assertEqual(manifest["platform"], "android")
             self.assertEqual(manifest["commit"], "a" * 40)
+            self.assertEqual(manifest["apiVersion"], 2)
+            self.assertEqual(manifest["requiredExports"], CONTRACT["requiredExports"])
+            self.assertEqual(len(manifest["contractSha256"]), 64)
             self.assertEqual(manifest["upstream"]["libgit2"], "1.9.7")
             self.assertEqual(
                 sorted(manifest["abis"]),
@@ -241,6 +261,46 @@ class CollectTests(unittest.TestCase):
             with mock.patch.object(collect, "tool_output", side_effect=fake):
                 code = collect.main(elf_arguments(directory, "readelf", "nm"))
             self.assertEqual(code, 1)
+
+    def test_missing_required_export_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            self.prepare(directory)
+
+            def fake(command: list[str]) -> str:
+                if "-lW" in command:
+                    return READELF_ALIGNED
+                return "".join(
+                    line + "\n"
+                    for line in NM_EXPORTS.splitlines()
+                    if "qg_api_version" not in line
+                )
+
+            with mock.patch.object(collect, "tool_output", side_effect=fake):
+                code = collect.main(elf_arguments(directory, "readelf", "nm"))
+            self.assertEqual(code, 1)
+
+    def test_missing_contract_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            self.prepare(directory)
+            (directory / "native_contract.json").unlink()
+            with mock.patch.object(collect, "tool_output", side_effect=self.fake_tool):
+                self.assertEqual(
+                    collect.main(elf_arguments(directory, "readelf", "nm")), 1
+                )
+
+    def test_missing_contract_argument_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            directory = Path(work)
+            self.prepare(directory)
+            arguments = elf_arguments(directory, "readelf", "nm")
+            index = arguments.index("--contract")
+            del arguments[index : index + 2]
+            with mock.patch.object(collect, "tool_output", side_effect=self.fake_tool):
+                # argparse rejects the absent required flag before any work.
+                with self.assertRaises(SystemExit):
+                    collect.main(arguments)
 
     def test_missing_abi_fails(self) -> None:
         with tempfile.TemporaryDirectory() as work:

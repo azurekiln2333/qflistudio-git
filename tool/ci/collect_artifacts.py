@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -74,6 +75,11 @@ def check_alignment(alignments: list[int], expected: int = PAGE_ALIGNMENT) -> No
         raise ArtifactError(f"LOAD segments not aligned to {hex(expected)}: {bad}")
 
 
+def parse_elf_symbols(readelf_path: Path, nm: str) -> list[str]:
+    """Return the defined dynamic symbols of one ELF library."""
+    return parse_defined_symbols(tool_output([nm, "-D", "--defined-only", str(readelf_path)]))
+
+
 def parse_defined_symbols(nm_output: str) -> list[str]:
     """Return defined dynamic symbol names, skipping linker internal names."""
     symbols = []
@@ -91,26 +97,138 @@ def parse_defined_symbols(nm_output: str) -> list[str]:
     return symbols
 
 
-def check_exports(symbols: list[str], prefix: str = EXPORT_PREFIX) -> None:
+def check_exports(
+    symbols: list[str],
+    prefix: str = EXPORT_PREFIX,
+    required: list[str] | tuple[str, ...] = (),
+) -> None:
     if not symbols:
         raise ArtifactError("No exported symbol found")
     unexpected = sorted({name for name in symbols if not name.startswith(prefix)})
     if unexpected:
         raise ArtifactError(f"Symbols without the {prefix} prefix: {unexpected[:20]}")
+    missing = sorted(set(required) - set(symbols))
+    if missing:
+        raise ArtifactError(
+            "Library lacks required exports: " + ", ".join(missing)
+        )
 
 
-def inspect_elf(library: Path, abi: str, readelf: str, nm: str) -> dict:
+def inspect_elf(
+    library: Path,
+    abi: str,
+    readelf: str,
+    nm: str,
+    required: list[str] | tuple[str, ...] = (),
+    require_page_alignment: bool = True,
+) -> dict:
+    """Check one ELF library and return its facts.
+
+    Only packaged mobile payloads must satisfy the 16 KiB LOAD alignment.
+    A host build runs with the plain host toolchain and is checked for format
+    and exported symbols only.
+    """
     alignments = parse_load_alignments(tool_output([readelf, "-lW", str(library)]))
-    check_alignment(alignments)
-    symbols = parse_defined_symbols(
-        tool_output([nm, "-D", "--defined-only", str(library)])
-    )
-    check_exports(symbols)
+    if require_page_alignment:
+        check_alignment(alignments)
+    elif not alignments:
+        raise ArtifactError("No LOAD program header found")
+    symbols = parse_elf_symbols(library, nm)
+    check_exports(symbols, required=required)
     return {
         "abi": abi,
         "kind": "elf",
-        "pageAlignment": PAGE_ALIGNMENT,
+        "pageAlignment": PAGE_ALIGNMENT if require_page_alignment else None,
         "loadAlignments": alignments,
+        "exportedSymbols": sorted(symbols),
+    }
+
+
+MACHO_ARCH_LINES = re.compile(r"\(for architecture (?P<arch>[A-Za-z0-9_]+)\):")
+NM_SYMBOL_TYPES = frozenset("TtDdBbSsRrWwVvCcIiNnAa")
+NM_SYMBOL = re.compile(r"^(?:[0-9a-fA-F]+\s+)?(?P<type>[A-Za-z?])\s+(?P<name>\S+)$")
+
+
+def parse_macho_symbols(nm_output: str) -> list[str]:
+    """Return exported Mach-O symbol names without their leading underscore.
+
+    A fat binary prints one `(for architecture <arch>):` header per slice. Those
+    headers and any blank or diagnostic line are skipped, so only real symbol
+    lines reach the export check. An undefined entry (`U`) is not an export.
+    """
+    symbols = []
+    for line in nm_output.splitlines():
+        if not line.strip():
+            continue
+        if MACHO_ARCH_LINES.search(line):
+            continue
+        match = NM_SYMBOL.match(line.strip())
+        if match is None:
+            # nm diagnostics such as `warning:` carry no symbol name.
+            continue
+        if match.group("type") not in NM_SYMBOL_TYPES:
+            continue
+        if match.group("type") in ("U", "u"):
+            continue
+        name = match.group("name")
+        if name.startswith("__"):
+            # Mach-O headers and other linker internals are not API exports.
+            continue
+        if name.startswith("_"):
+            name = name[1:]
+        if name:
+            symbols.append(name)
+    return symbols
+
+
+def macho_architectures(tool: str, binary: Path) -> list[str]:
+    """Return the slice architectures of a Mach-O file, thin or fat."""
+    output = tool_output([tool, "-arch", "all", str(binary)])
+    found = []
+    for line in output.splitlines():
+        match = MACHO_ARCH_LINES.search(line)
+        if match is None:
+            continue
+        arch = match.group("arch")
+        if arch not in found:
+            found.append(arch)
+    return found
+
+
+def macho_exports(tool: str, binary: Path) -> list[str]:
+    """Return exported symbols per architecture, never mixing slices.
+
+    A fat binary cannot be read with one flat `nm` pass: the per-archive header
+    lines would be mistaken for symbols. Each architecture is queried on its
+    own with `nm -arch <arch> -gU`, which prints a thin symbol table.
+    """
+    architectures = macho_architectures(tool, binary)
+    if not architectures:
+        return parse_macho_symbols(tool_output([tool, "-gU", str(binary)]))
+    symbols = []
+    for arch in architectures:
+        for name in parse_macho_symbols(
+            tool_output([tool, "-arch", arch, "-gU", str(binary)])
+        ):
+            if name not in symbols:
+                symbols.append(name)
+    return symbols
+
+
+def inspect_macho(
+    binary: Path,
+    label: str,
+    nm: str,
+    required: list[str] | tuple[str, ...] = (),
+) -> dict:
+    if not binary.is_file():
+        raise ArtifactError(f"Missing Mach-O binary: {binary}")
+    symbols = macho_exports(nm, binary)
+    check_exports(symbols, required=required)
+    return {
+        "abi": label,
+        "kind": "macho",
+        "architectures": macho_architectures(nm, binary),
         "exportedSymbols": sorted(symbols),
     }
 
@@ -180,6 +298,36 @@ def add_zip_sizes(out: Path, records: list[dict]) -> None:
         )
 
 
+def load_contract(path: Path) -> dict:
+    """Read the required native API version and exported symbols."""
+    if not path.is_file():
+        raise ArtifactError(f"Missing native contract: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ArtifactError(f"Cannot parse {path}: {error}") from error
+    api_version = data.get("apiVersion")
+    if not isinstance(api_version, int) or isinstance(api_version, bool) or api_version <= 0:
+        raise ArtifactError(f"{path} has no positive integer apiVersion")
+    required = data.get("requiredExports")
+    if not isinstance(required, list) or not required:
+        raise ArtifactError(f"{path} has no requiredExports list")
+    names = []
+    for name in required:
+        if not isinstance(name, str) or not name.startswith(EXPORT_PREFIX):
+            raise ArtifactError(f"{path} lists a non-{EXPORT_PREFIX} export: {name!r}")
+        if not name.replace("_", "").isalnum():
+            raise ArtifactError(f"{path} lists an invalid symbol: {name!r}")
+        names.append(name)
+    if len(set(names)) != len(names):
+        raise ArtifactError(f"{path} lists duplicate exports")
+    return {
+        "apiVersion": api_version,
+        "requiredExports": names,
+        "sha256": digest(path),
+    }
+
+
 def collect_licenses(
     repo_root: Path, out: Path, overrides: list[str], records: list[dict]
 ) -> list[str]:
@@ -215,6 +363,12 @@ def collect_licenses(
 
 def collect(args: argparse.Namespace) -> dict:
     out: Path = args.out
+    contract = args.contract_data
+    if contract is None:
+        # Every artifact must name the API version and required exports; an
+        # artifact without a contract cannot be imported anywhere.
+        raise ArtifactError("collect_artifacts requires --contract")
+    required = list(contract["requiredExports"])
     if out.exists() and any(out.iterdir()):
         raise ArtifactError(f"Artifact directory must be empty: {out}")
     if args.platform in ELF_PLATFORMS:
@@ -233,6 +387,8 @@ def collect(args: argparse.Namespace) -> dict:
             raise ArtifactError("ios needs --xcframework")
         if not (args.xcframework / "Info.plist").is_file():
             raise ArtifactError(f"Not an xcframework: {args.xcframework}")
+        if not args.nm:
+            raise ArtifactError("ios needs --nm to check the exported symbols")
     else:
         raise ArtifactError(f"Unsupported platform: {args.platform}")
 
@@ -246,7 +402,9 @@ def collect(args: argparse.Namespace) -> dict:
             library = directory / LIBRARY_NAME
             if not library.is_file():
                 raise ArtifactError(f"Missing build output: {library}")
-            checks.append(inspect_elf(library, abi, args.readelf, args.nm))
+            checks.append(
+                inspect_elf(library, abi, args.readelf, args.nm, required)
+            )
             records.append(copy_file(library, out, f"{abi}/{LIBRARY_NAME}", abi))
             header = directory / HEADER_NAME
             if header.is_file():
@@ -258,20 +416,43 @@ def collect(args: argparse.Namespace) -> dict:
                 continue
             relative = f"{FRAMEWORK_NAME}/" + source.relative_to(args.xcframework).as_posix()
             records.append(copy_file(source, out, relative, None))
+        slices = sorted(
+            child.name for child in args.xcframework.iterdir() if child.is_dir()
+        )
         checks.append(
             {
                 "abi": "ios",
                 "kind": "xcframework",
-                "slices": sorted(
-                    child.name for child in args.xcframework.iterdir() if child.is_dir()
-                ),
+                "slices": slices,
             }
         )
+        # The layout is <slice>/qfli_git.framework/qfli_git.
+        binaries = sorted(
+            path
+            for path in args.xcframework.rglob("*")
+            if path.is_file()
+            and path.parent.name == "qfli_git.framework"
+            and path.name == "qfli_git"
+        )
+        if len(binaries) != len(slices):
+            raise ArtifactError(
+                "Expected one framework binary per slice: "
+                + ", ".join(str(path) for path in binaries)
+            )
+        for binary in binaries:
+            checks.append(
+                inspect_macho(
+                    binary,
+                    binary.parent.parent.name,
+                    args.nm,
+                    required,
+                )
+            )
         abis = list(args.abi or [])
     licenses = collect_licenses(args.repo_root, out, args.license, records)
     add_zip_sizes(out, records)
     manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "platform": args.platform,
         "abis": abis,
         "commit": args.commit,
@@ -280,6 +461,9 @@ def collect(args: argparse.Namespace) -> dict:
         "licenses": licenses,
         "checks": checks,
         "files": records,
+        "apiVersion": contract["apiVersion"],
+        "requiredExports": contract["requiredExports"],
+        "contractSha256": contract["sha256"],
     }
     (out / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -296,8 +480,18 @@ def summary(manifest: dict) -> str:
                 f"- `{check['abi']}`: LOAD {align}, "
                 f"{len(check['exportedSymbols'])} exported symbols"
             )
+        elif check["kind"] == "macho":
+            lines.append(
+                f"- `{check['abi']}`: {len(check['exportedSymbols'])} exported symbols"
+            )
         else:
             lines.append(f"- slices: {', '.join(check['slices'])}")
+    if manifest.get("apiVersion"):
+        lines.insert(
+            2,
+            f"API version {manifest['apiVersion']}, "
+            f"{len(manifest.get('requiredExports', []))} required exports",
+        )
     lines.extend(["", "| File | Bytes | Zipped | SHA-256 |", "| --- | ---: | ---: | --- |"])
     for record in manifest["files"]:
         lines.append(
@@ -319,9 +513,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--versions", type=Path, help="third_party/versions.json")
     parser.add_argument("--license", action="append", default=[], metavar="PATH[=NAME]")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--contract",
+        type=Path,
+        required=True,
+        help="native_contract.json with the API version and required exports",
+    )
     parser.add_argument("--commit", default="")
     args = parser.parse_args(argv)
     args.repo_root = args.repo_root.resolve()
+    args.contract_data = None
+    try:
+        args.contract_data = load_contract(args.contract)
+    except (ArtifactError, OSError) as error:
+        print(f"collect_artifacts: {error}", file=sys.stderr)
+        return 1
     if args.versions is None:
         args.versions = args.repo_root / "third_party/versions.json"
     if not args.commit:

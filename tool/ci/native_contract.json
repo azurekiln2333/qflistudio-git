@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "apiVersion": 2,
+  "description": "Frozen native ABI contract for qfli_git. Every collected artifact, native import, lock file and Dart binding must match this exact API version and export list. Bump apiVersion together with QG_API_VERSION in native/include/qfli_git.h and qgApiVersion in lib/src/bindings.dart whenever a symbol is added, removed or renamed.",
+  "requiredExports": [
+    "qg_api_version",
+    "qg_libgit2_version",
+    "qg_mbedtls_version",
+    "qg_init",
+    "qg_shutdown",
+    "qg_repo_init",
+    "qg_repo_open",
+    "qg_repo_free",
+    "qg_clone",
+    "qg_fetch",
+    "qg_push",
+    "qg_add_all",
+    "qg_stage_paths",
+    "qg_unstage_paths",
+    "qg_commit",
+    "qg_branch_create",
+    "qg_checkout_branch",
+    "qg_merge",
+    "qg_merge_commit",
+    "qg_conflicts_json",
+    "qg_diff_json",
+    "qg_log_json",
+    "qg_branches_json",
+    "qg_remotes_json",
+    "qg_remote_set_url",
+    "qg_status_json",
+    "qg_head_json",
+    "qg_string_free"
+  ],
+  "symbolPrefix": "qg_",
+  "platforms": {
+    "android": {
+      "abis": ["arm64-v8a", "armeabi-v7a", "x86_64"],
+      "kind": "elf",
+      "minPageAlignment": 16384,
+      "packages": [
+        "android/src/main/jniLibs/{abi}/libqfli_git.so"
+      ]
+    },
+    "ohos": {
+      "abis": ["arm64-v8a", "x86_64"],
+      "kind": "elf",
+      "minPageAlignment": 16384,
+      "packages": [
+        "ohos/libs/{abi}/libqfli_git.so"
+      ]
+    },
+    "ios": {
+      "slices": ["ios-arm64", "ios-arm64_x86_64-simulator"],
+      "kind": "xcframework",
+      "framework": "qfli_git.xcframework",
+      "packages": [
+        "ios/Frameworks/qfli_git.xcframework/{slice}/qfli_git.framework/qfli_git"
+      ]
+    }
+  },
+  "caBundle": {
+    "path": "assets/cacert.pem",
+    "version": "2026-11-05"
+  },
+  "upstream": {
+    "libgit2": "1.9.7",
+    "mbedtls": "3.6.8"
+  }
+}

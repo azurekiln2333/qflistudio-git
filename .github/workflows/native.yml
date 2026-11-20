@@ -5,6 +5,7 @@ name: Native libraries
     branches:
       - main
       - 'integration/**'
+      - 'release/**'
     tags:
       - 'native-v*'
   workflow_dispatch:
@@ -46,12 +47,29 @@ jobs:
         run: python3 tool/fetch_sources.py
       - name: Build host library
         run: bash tool/build_native.sh --platform host --out native/build/ci/host
+      - name: Check the host library against the native contract
+        run: |
+          python3 tool/ci/check_library.py \
+            --library native/build/ci/host/libqfli_git.so \
+            --contract tool/ci/native_contract.json
       - name: Run smoke test
         run: ./native/build/ci/host/qfli_git_smoke
+      # The Dart job runs the FFI tests against this exact build.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qfli-git-host-${{ github.sha }}
+          path: native/build/ci/host/libqfli_git.so
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
 
   dart-checks:
     name: Dart analyze and tests
     runs-on: ubuntu-24.04
+    # Bindings must be checked against the library built in this same run,
+    # never against the checked-in mobile payloads.
+    needs: host-smoke
+    if: ${{ !cancelled() && needs.host-smoke.result == 'success' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,8 +82,15 @@ jobs:
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
           flutter-version: ${{ env.FLUTTER_VERSION }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: qfli-git-host-${{ github.sha }}
+          path: native/build/ci/host
       - name: Plugin analyze and unit tests
+        env:
+          QFLI_GIT_LIBRARY: ${{ github.workspace }}/native/build/ci/host/libqfli_git.so
         run: |
+          chmod +x "$QFLI_GIT_LIBRARY"
           flutter pub get
           bash tool/ci/run_annotated.sh plugin-format dart format --output=none --set-exit-if-changed lib test
           bash tool/ci/run_annotated.sh plugin-analyze flutter analyze lib test
@@ -116,6 +141,7 @@ jobs:
             --library "x86_64=native/build/ci/android/x86_64" \
             --readelf "$toolchain/llvm-readelf" \
             --nm "$toolchain/llvm-nm" \
+            --contract tool/ci/native_contract.json \
             --commit "${{ github.sha }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -161,6 +187,7 @@ jobs:
             --library "x86_64=native/build/ci/ohos/x86_64" \
             --readelf "$toolchain/llvm-readelf" \
             --nm "$toolchain/llvm-nm" \
+            --contract tool/ci/native_contract.json \
             --commit "${{ github.sha }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -192,7 +219,9 @@ jobs:
       - name: Check framework bundle metadata
         run: |
           # iOS refuses to install an app whose embedded framework lacks these keys.
-          for plist in native/build/ci/ios/device/qfli_git.framework/Info.plist                        native/build/ci/ios/simulator/qfli_git.framework/Info.plist; do
+          for plist in \
+            native/build/ci/ios/device/qfli_git.framework/Info.plist \
+            native/build/ci/ios/simulator/qfli_git.framework/Info.plist; do
             for key in CFBundleIdentifier CFBundleExecutable CFBundleVersion MinimumOSVersion; do
               value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist" 2>/dev/null || true)
               if [ -z "$value" ]; then
@@ -216,6 +245,8 @@ jobs:
             --xcframework native/build/ci/ios/qfli_git.xcframework \
             --abi arm64 \
             --abi x86_64 \
+            --nm /usr/bin/nm \
+            --contract tool/ci/native_contract.json \
             --commit "${{ github.sha }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -224,6 +255,64 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  native-lock:
+    name: Contract, bindings and native lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Validate the native contract against the header and bindings
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          contract = json.loads(Path('tool/ci/native_contract.json').read_text(encoding='utf-8'))
+          version = contract['apiVersion']
+          assert isinstance(version, int) and version > 0, version
+          exports = contract['requiredExports']
+          assert len(exports) == len(set(exports)), 'duplicate exports'
+          assert all(name.startswith('qg_') for name in exports), 'non-prefixed export'
+
+          header = Path('native/include/qfli_git.h').read_text(encoding='utf-8')
+          header_version = re.search(r'#define\s+QG_API_VERSION\s+(\d+)', header)
+          assert header_version, 'header has no QG_API_VERSION'
+          assert int(header_version.group(1)) == version, header_version.group(1)
+          for name in exports:
+              assert re.search(rf'\b{name}\s*\(', header), (
+                  f'{name} is not declared in the header'
+              )
+
+          bindings = Path('lib/src/bindings.dart').read_text(encoding='utf-8')
+          dart_version = re.search(r'const int qgApiVersion\s*=\s*(\d+)\s*;', bindings)
+          assert dart_version, 'bindings have no qgApiVersion'
+          assert int(dart_version.group(1)) == version, dart_version.group(1)
+          for name in exports:
+              assert re.search(rf"['\"]{name}['\"]", bindings), (
+                  f'{name} has no binding lookup'
+              )
+          print(f'PASS API {version} with {len(exports)} exports in header and bindings')
+          PY
+      - name: Check the imported native lock
+        run: |
+          # The pre-import lock still describes the old native-v0.1.1 API v1
+          # payloads. The strict check runs as soon as the cloud-built artifacts
+          # are imported, so a bad artifact commit fails here.
+          schema=$(python3 -c "import json;print(json.load(open('native_libs.lock.json')).get('schemaVersion'))")
+          if [ "$schema" != "2" ]; then
+            echo "::warning title=native-lock::native_libs.lock.json is still schema $schema (pre-import). The strict check runs on the artifact commit."
+            exit 0
+          fi
+          python3 tool/ci/check_native_install.py \
+            --repo-root . \
+            --contract tool/ci/native_contract.json
 
   example-android:
     name: Example Android APK
@@ -247,7 +336,16 @@ jobs:
           name: qfli-git-android-${{ github.sha }}
           path: native/build/ci/artifacts/android
       - name: Import Android libraries into the plugin
-        run: python3 tool/import_artifacts.py --artifact native/build/ci/artifacts/android
+        run: |
+          python3 tool/import_artifacts.py \
+            --artifact native/build/ci/artifacts/android \
+            --contract tool/ci/native_contract.json \
+            --commit "${{ github.sha }}" \
+            --run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: Add Maven Central for the Flutter included Gradle build
+        run: |
+          mkdir -p "$HOME/.gradle/init.d"
+          cp tool/ci/android-maven-central.init.gradle "$HOME/.gradle/init.d/qfli-maven-central.gradle"
       - name: Build example APK
         working-directory: example
         run: bash ../tool/ci/run_annotated.sh example-android flutter build apk --debug
@@ -274,10 +372,22 @@ jobs:
           name: qfli-git-ios-${{ github.sha }}
           path: native/build/ci/artifacts/ios
       - name: Import iOS framework into the plugin
-        run: python3 tool/import_artifacts.py --artifact native/build/ci/artifacts/ios
+        run: |
+          python3 tool/import_artifacts.py \
+            --artifact native/build/ci/artifacts/ios \
+            --contract tool/ci/native_contract.json \
+            --commit "${{ github.sha }}" \
+            --run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Build example simulator app
         working-directory: example
         run: bash ../tool/ci/run_annotated.sh example-ios flutter build ios --simulator --no-codesign
+      - name: Check the packaged simulator app payload
+        run: |
+          python3 tool/ci/check_git_payload.py \
+            --platform ios \
+            --archive example/build/ios/iphonesimulator/Runner.app \
+            --contract tool/ci/native_contract.json \
+            --nm /usr/bin/nm
       - name: Boot an iOS simulator
         run: |
           udid=$(xcrun simctl list devices available -j | python3 -c '

@@ -131,6 +131,161 @@ class GitHead {
   String toString() => '${branch ?? '(detached)'} $oid $state';
 }
 
+/// A patch returned by [GitRepository.diff].
+class GitDiff {
+  const GitDiff({this.patch = '', this.binary = false, this.truncated = false});
+
+  /// Unified diff text, empty for a binary or empty change.
+  final String patch;
+
+  /// The native layer treated the file as binary and omitted its content.
+  final bool binary;
+
+  /// The patch was cut at the requested byte bound.
+  final bool truncated;
+
+  /// Whether there is nothing to show.
+  bool get isEmpty => patch.isEmpty;
+
+  factory GitDiff.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('expected a diff object');
+    }
+    final patch = json['patch'];
+    if (patch != null && patch is! String) {
+      throw const FormatException('diff patch is not a string');
+    }
+    return GitDiff(
+      patch: patch is String ? patch : '',
+      binary: json['binary'] == true,
+      truncated: json['truncated'] == true,
+    );
+  }
+
+  @override
+  String toString() =>
+      'GitDiff(${patch.length} bytes, binary: $binary, truncated: $truncated)';
+}
+
+/// One commit returned by [GitRepository.log].
+class GitCommit {
+  const GitCommit({
+    required this.oid,
+    required this.message,
+    required this.authorName,
+    required this.authorEmail,
+    required this.time,
+  });
+
+  /// Full hexadecimal commit id.
+  final String oid;
+
+  /// Commit message without the trailing newline libgit2 stores.
+  final String message;
+
+  final String authorName;
+  final String authorEmail;
+
+  /// Author time in UTC.
+  final DateTime time;
+
+  factory GitCommit.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('expected a commit object');
+    }
+    final oid = json['oid'];
+    if (oid is! String || oid.isEmpty) {
+      throw const FormatException('commit object without an oid');
+    }
+    final time = json['time'];
+    if (time is! num) {
+      throw const FormatException('commit object without a numeric time');
+    }
+    final message = json['message'];
+    final authorName = json['authorName'];
+    final authorEmail = json['authorEmail'];
+    return GitCommit(
+      oid: oid,
+      message: message is String ? message : '',
+      authorName: authorName is String ? authorName : '',
+      authorEmail: authorEmail is String ? authorEmail : '',
+      time: DateTime.fromMillisecondsSinceEpoch(
+        (time * 1000).round(),
+        isUtc: true,
+      ),
+    );
+  }
+
+  @override
+  String toString() => '$oid ${message.split('\n').first}';
+}
+
+/// One local or remote branch returned by [GitRepository.branches].
+class GitBranch {
+  const GitBranch({
+    required this.name,
+    this.current = false,
+    this.remote = false,
+    this.upstream,
+  });
+
+  /// Branch name without a `refs/heads/` prefix.
+  final String name;
+
+  /// Whether this is the checked-out branch.
+  final bool current;
+
+  /// Whether this is a remote tracking branch.
+  final bool remote;
+
+  /// Configured upstream branch for a local branch, or null.
+  final String? upstream;
+
+  factory GitBranch.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('expected a branch object');
+    }
+    final name = json['name'];
+    if (name is! String || name.isEmpty) {
+      throw const FormatException('branch object without a name');
+    }
+    final upstream = json['upstream'];
+    return GitBranch(
+      name: name,
+      current: json['current'] == true,
+      remote: json['remote'] == true,
+      upstream: upstream is String && upstream.isNotEmpty ? upstream : null,
+    );
+  }
+
+  @override
+  String toString() =>
+      '${remote ? 'refs/remotes/' : ''}$name${current ? ' (current)' : ''}';
+}
+
+/// One configured remote returned by [GitRepository.remotes].
+class GitRemote {
+  const GitRemote({required this.name, required this.url});
+
+  final String name;
+  final String url;
+
+  factory GitRemote.fromJson(Object? json) {
+    if (json is! Map) {
+      throw const FormatException('expected a remote object');
+    }
+    final name = json['name'];
+    if (name is! String || name.isEmpty) {
+      throw const FormatException('remote object without a name');
+    }
+    final url = json['url'];
+    return GitRemote(name: name, url: url is String ? url : '');
+  }
+
+  @override
+  String toString() => '$name $url';
+}
+
 /// Failure reported by the native layer.
 class GitException implements Exception {
   const GitException(this.code, this.klass, this.message);
@@ -283,6 +438,52 @@ GitHead parseHead(String source) {
   return GitHead.fromJson(decoded);
 }
 
+/// Parses `qg_diff_json` output, which is
+/// `{"patch":..,"binary":..,"truncated":..}`.
+GitDiff parseDiff(String source) {
+  final decoded = jsonDecode(source);
+  if (decoded == null) {
+    throw const FormatException('diff JSON is empty');
+  }
+  return GitDiff.fromJson(decoded);
+}
+
+/// Parses `qg_log_json` output, an array of commit objects.
+List<GitCommit> parseLog(String source) {
+  final decoded = jsonDecode(source);
+  if (decoded == null) {
+    return const <GitCommit>[];
+  }
+  if (decoded is! List) {
+    throw const FormatException('expected a JSON array of commits');
+  }
+  return [for (final entry in decoded) GitCommit.fromJson(entry)];
+}
+
+/// Parses `qg_branches_json` output, an array of branch objects.
+List<GitBranch> parseBranches(String source) {
+  final decoded = jsonDecode(source);
+  if (decoded == null) {
+    return const <GitBranch>[];
+  }
+  if (decoded is! List) {
+    throw const FormatException('expected a JSON array of branches');
+  }
+  return [for (final entry in decoded) GitBranch.fromJson(entry)];
+}
+
+/// Parses `qg_remotes_json` output, an array of remote objects.
+List<GitRemote> parseRemotes(String source) {
+  final decoded = jsonDecode(source);
+  if (decoded == null) {
+    return const <GitRemote>[];
+  }
+  if (decoded is! List) {
+    throw const FormatException('expected a JSON array of remotes');
+  }
+  return [for (final entry in decoded) GitRemote.fromJson(entry)];
+}
+
 /// Entry point of the plugin.
 class QfliGit {
   QfliGit._();
@@ -343,12 +544,7 @@ class QfliGit {
       if (code != 0) {
         throw GitException.fromNative(NativeError.read(error, code));
       }
-      final version = bindings.apiVersion();
-      if (version != qgApiVersion) {
-        throw StateError(
-          'qfli_git reports API version $version, expected $qgApiVersion.',
-        );
-      }
+      bindings.checkApiVersion();
     } finally {
       if (caFilePointer != nullptr) {
         malloc.free(caFilePointer);
@@ -378,6 +574,7 @@ class GitRepository {
     String? token,
     CancelToken? cancel,
   }) async {
+    final cloneUrl = _validateRemoteUrl(url);
     final target = _absolute(path);
     final caFile = QfliGit.caFile;
     final cancelAddress = cancel?.acquireOperation();
@@ -390,8 +587,9 @@ class GitRepository {
           error = calloc<QgError>();
           out = calloc<Pointer<QgRepo>>();
           final cancelFlag = _cancelPointer(cancelAddress);
+          bindings.checkApiVersion();
           _initIfNeeded(bindings, caFile, error);
-          return _withUtf8([url, target, username, token], (values) {
+          return _withUtf8([cloneUrl, target, username, token], (values) {
             final code = bindings.clone(
               values[0],
               values[1],
@@ -440,6 +638,7 @@ class GitRepository {
       try {
         error = calloc<QgError>();
         out = calloc<Pointer<QgRepo>>();
+        bindings.checkApiVersion();
         _initIfNeeded(bindings, caFile, error);
         return _withUtf8([target], (values) {
           final code = bindings.repoInit(values[0], bare ? 1 : 0, out, error);
@@ -478,6 +677,55 @@ class GitRepository {
     return Isolate.run(
       () => _withRepo(repoPath, caFile, (session) {
         session.check(session.bindings.addAll(session.repo, session.error));
+      }),
+    );
+  }
+
+  /// Stages exactly [paths].
+  ///
+  /// Paths are repository-relative and use forward slashes. The native layer
+  /// validates each path before touching the index, so wildcards and traversal
+  /// are rejected instead of being expanded.
+  Future<void> stagePaths(List<String> paths) {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    final entries = List<String>.of(paths);
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        _withUtf8Array(entries, (values, count) {
+          session.check(
+            session.bindings.stagePaths(
+              session.repo,
+              values,
+              count,
+              session.error,
+            ),
+          );
+        });
+      }),
+    );
+  }
+
+  /// Removes exactly [paths] from the index, restoring the HEAD version.
+  ///
+  /// Paths without a HEAD entry are dropped from the index, which also covers
+  /// newly added files on an unborn branch.
+  Future<void> unstagePaths(List<String> paths) {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    final entries = List<String>.of(paths);
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        _withUtf8Array(entries, (values, count) {
+          session.check(
+            session.bindings.unstagePaths(
+              session.repo,
+              values,
+              count,
+              session.error,
+            ),
+          );
+        });
       }),
     );
   }
@@ -642,6 +890,111 @@ class GitRepository {
     );
   }
 
+  /// Returns the patch for [path], or for the whole repository when null.
+  ///
+  /// [staged] selects the index against HEAD; otherwise the work tree is
+  /// compared with the index. [maxBytes] bounds the patch size. The native
+  /// layer clamps it to its supported maximum and reports truncation.
+  Future<GitDiff> diff({
+    String? path,
+    bool staged = false,
+    int maxBytes = 262144,
+  }) {
+    final repoPath = this.path;
+    final caFile = QfliGit.caFile;
+    final target = path;
+    final stagedFlag = staged ? 1 : 0;
+    final bound = maxBytes;
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        final json = _withUtf8([target], (values) {
+          return session.readJson(
+            (out) => session.bindings.diffJson(
+              session.repo,
+              values[0],
+              stagedFlag,
+              bound,
+              out,
+              session.error,
+            ),
+          );
+        });
+        return parseDiff(json);
+      }),
+    );
+  }
+
+  /// Lists up to [limit] commits reachable from HEAD, newest first.
+  Future<List<GitCommit>> log({int limit = 20}) {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    final maximum = limit;
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        final json = session.readJson(
+          (out) => session.bindings.logJson(
+            session.repo,
+            maximum,
+            out,
+            session.error,
+          ),
+        );
+        return parseLog(json);
+      }),
+    );
+  }
+
+  /// Lists local and remote tracking branches.
+  Future<List<GitBranch>> branches() {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        final json = session.readJson(
+          (out) =>
+              session.bindings.branchesJson(session.repo, out, session.error),
+        );
+        return parseBranches(json);
+      }),
+    );
+  }
+
+  /// Lists the configured remotes.
+  Future<List<GitRemote>> remotes() {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        final json = session.readJson(
+          (out) =>
+              session.bindings.remotesJson(session.repo, out, session.error),
+        );
+        return parseRemotes(json);
+      }),
+    );
+  }
+
+  /// Creates [name] or updates its URL to [url].
+  Future<void> setRemote(String name, String url) {
+    final repoPath = path;
+    final caFile = QfliGit.caFile;
+    final remoteUrl = _validateRemoteUrl(url);
+    return Isolate.run(
+      () => _withRepo(repoPath, caFile, (session) {
+        _withUtf8([name, remoteUrl], (values) {
+          session.check(
+            session.bindings.remoteSetUrl(
+              session.repo,
+              values[0],
+              values[1],
+              session.error,
+            ),
+          );
+        });
+      }),
+    );
+  }
+
   /// Reads the current HEAD.
   Future<GitHead> head() {
     final repoPath = path;
@@ -779,6 +1132,7 @@ T _withRepo<T>(
     error = calloc<QgError>();
     out = calloc<Pointer<QgRepo>>();
     pathPointer = repoPath.toNativeUtf8();
+    bindings.checkApiVersion();
     _initIfNeeded(bindings, caFile, error);
     final code = bindings.repoOpen(pathPointer, out, error);
     if (code != 0) {
@@ -852,6 +1206,34 @@ T _withUtf8<T>(
   }
 }
 
+/// Runs [body] with a NUL terminated UTF-8 array of [values] and frees it
+/// afterwards. An empty list passes a null array with a zero count.
+T _withUtf8Array<T>(
+  List<String> values,
+  T Function(Pointer<Pointer<Utf8>> pointers, int count) body,
+) {
+  Pointer<Pointer<Utf8>> array = nullptr;
+  final strings = <Pointer<Utf8>>[];
+  try {
+    if (values.isNotEmpty) {
+      array = calloc<Pointer<Utf8>>(values.length);
+      for (var index = 0; index < values.length; index++) {
+        final pointer = values[index].toNativeUtf8();
+        strings.add(pointer);
+        array[index] = pointer;
+      }
+    }
+    return body(array, values.length);
+  } finally {
+    for (final pointer in strings) {
+      malloc.free(pointer);
+    }
+    if (array != nullptr) {
+      calloc.free(array);
+    }
+  }
+}
+
 /// Runs [body] with a 41 byte object id buffer and frees it afterwards.
 T _withOid<T>(T Function(Pointer<Uint8> oid) body) {
   final buffer = calloc<Uint8>(qgOidBufferBytes);
@@ -863,3 +1245,69 @@ T _withOid<T>(T Function(Pointer<Uint8> oid) body) {
 }
 
 String _absolute(String path) => p.normalize(p.absolute(path));
+
+///
+/// Accepts the remote forms libgit2 can use without inventing credentials:
+/// `https://`, `http://`, `ssh://`, `git://`, `file://` and scp-like
+/// `user@host:path`. Embedded user info is rejected so a token can never reach
+/// the URL, the Git config or a process argument list.
+String _validateRemoteUrl(String url) {
+  final value = url.trim();
+  if (value.isEmpty) {
+    throw const GitException(qgEInvalid, 0, 'remote URL is required');
+  }
+  if (value.length > 2048) {
+    throw const GitException(qgEInvalid, 0, 'remote URL is too long');
+  }
+  if (value.contains('\u0000') ||
+      RegExp(r'[\u0000-\u001f\u007f]').hasMatch(value)) {
+    throw const GitException(
+      qgEInvalid,
+      0,
+      'remote URL has control characters',
+    );
+  }
+
+  final scheme = RegExp(r'^([a-zA-Z][a-zA-Z0-9+.\-]*)://').firstMatch(value);
+  if (scheme != null) {
+    final name = scheme.group(1)!.toLowerCase();
+    if (!const {'http', 'https', 'ssh', 'git', 'file'}.contains(name)) {
+      throw const GitException(qgEInvalid, 0, 'unsupported remote URL scheme');
+    }
+    final Uri uri;
+    try {
+      uri = Uri.parse(value);
+    } on FormatException {
+      throw const GitException(qgEInvalid, 0, 'remote URL is malformed');
+    }
+    if (uri.userInfo.isNotEmpty) {
+      throw const GitException(
+        qgEInvalid,
+        0,
+        'remote URL must not embed credentials',
+      );
+    }
+    if (name != 'file' && uri.host.isEmpty) {
+      throw const GitException(qgEInvalid, 0, 'remote URL has no host');
+    }
+    if (name == 'file' && uri.path.isEmpty) {
+      throw const GitException(qgEInvalid, 0, 'remote URL has no path');
+    }
+    return value;
+  }
+
+  // scp-like syntax: user@host:path. A bare local path is not a remote.
+  final scp = RegExp(r'^([^@/\\:]+)@([^/\\:]+):(.+)$').firstMatch(value);
+  if (scp != null) {
+    if (scp.group(3)!.isEmpty) {
+      throw const GitException(qgEInvalid, 0, 'remote URL has no path');
+    }
+    return value;
+  }
+
+  throw const GitException(
+    qgEInvalid,
+    0,
+    'remote URL needs a scheme such as https://',
+  );
+}

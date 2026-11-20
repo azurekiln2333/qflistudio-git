@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -40,6 +41,28 @@ def safe_relative(name: str) -> PurePosixPath:
     return relative
 
 
+def load_contract(path: Path) -> dict:
+    """Read the API version and required exports recorded for every artifact."""
+    if not path.is_file():
+        raise ArtifactError(f"Missing native contract: {path}")
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ArtifactError(f"Cannot parse {path}: {error}") from error
+    version = contract.get("apiVersion")
+    if not isinstance(version, int) or isinstance(version, bool) or version <= 0:
+        raise ArtifactError(f"{path} has no positive integer apiVersion")
+    exports = contract.get("requiredExports")
+    if not isinstance(exports, list) or not exports:
+        raise ArtifactError(f"{path} has no requiredExports list")
+    for name in exports:
+        if not isinstance(name, str) or not name.startswith("qg_"):
+            raise ArtifactError(f"{path} lists a non-qg export: {name!r}")
+    if len(set(exports)) != len(exports):
+        raise ArtifactError(f"{path} lists duplicate exports")
+    return contract
+
+
 def load_manifest(artifact: Path) -> dict:
     path = artifact / "manifest.json"
     if not path.is_file():
@@ -53,9 +76,49 @@ def load_manifest(artifact: Path) -> dict:
         raise ArtifactError(f"Unsupported platform in {path}: {platform!r}")
     if not isinstance(manifest.get("files"), list) or not manifest["files"]:
         raise ArtifactError(f"No files recorded in {path}")
-    if not isinstance(manifest.get("commit"), str) or not manifest["commit"]:
-        raise ArtifactError(f"Missing source commit in {path}")
+    commit = manifest.get("commit")
+    if (
+        not isinstance(commit, str)
+        or len(commit) != 40
+        or any(character not in "0123456789abcdef" for character in commit.lower())
+    ):
+        raise ArtifactError(f"Missing or malformed source commit in {path}")
     return manifest
+
+
+def verify_contract(manifest: dict, contract: dict) -> None:
+    """Require the artifact to carry the exact native API contract."""
+    if manifest.get("apiVersion") != contract["apiVersion"]:
+        raise ArtifactError(
+            f"Artifact API version {manifest.get('apiVersion')!r} does not match "
+            f"the contract {contract['apiVersion']!r}"
+        )
+    if manifest.get("requiredExports") != contract["requiredExports"]:
+        raise ArtifactError(
+            "Artifact required exports do not match the native contract"
+        )
+    if (
+        contract.get("sha256")
+        and manifest.get("contractSha256") != contract["sha256"]
+    ):
+        raise ArtifactError(
+            "Artifact was built from a different native contract file"
+        )
+    checks = manifest.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise ArtifactError("Artifact has no exported-symbol checks")
+    symbols = set()
+    for check in checks:
+        if check.get("kind") in ("elf", "macho"):
+            exported = check.get("exportedSymbols")
+            if not isinstance(exported, list):
+                raise ArtifactError("Artifact check has no exportedSymbols list")
+            symbols.update(exported)
+    missing = sorted(set(contract["requiredExports"]) - symbols)
+    if missing:
+        raise ArtifactError(
+            "Artifact checks lack required exports: " + ", ".join(missing)
+        )
 
 
 def verify_manifest(artifact: Path, manifest: dict) -> list[dict]:
@@ -115,7 +178,12 @@ def destination_for(platform: str, repo_root: Path, record: dict) -> Path:
     raise ArtifactError(f"Unsupported platform: {platform}")
 
 
-def import_artifact(artifact: Path, repo_root: Path, commit_filter: str | None = None) -> dict:
+def import_artifact(
+    artifact: Path,
+    repo_root: Path,
+    commit_filter: str | None = None,
+    contract: dict | None = None,
+) -> dict:
     """Verify one artifact directory and copy its libraries into the plugin."""
     manifest = load_manifest(artifact)
     platform = manifest["platform"]
@@ -123,6 +191,11 @@ def import_artifact(artifact: Path, repo_root: Path, commit_filter: str | None =
         raise ArtifactError(
             f"Artifact commit {manifest['commit']} does not match expected {commit_filter}"
         )
+    if contract is None:
+        raise ArtifactError(
+            "Native imports need tool/ci/native_contract.json; refusing unverified API version"
+        )
+    verify_contract(manifest, contract)
     verified = verify_manifest(artifact, manifest)
     payload = [record for record in verified if is_payload(platform, record)]
     if not payload:
@@ -153,8 +226,12 @@ def import_artifact(artifact: Path, repo_root: Path, commit_filter: str | None =
     return {
         "platform": platform,
         "commit": manifest["commit"],
+        "apiVersion": manifest["apiVersion"],
+        "requiredExports": manifest["requiredExports"],
+        "contractSha256": manifest.get("contractSha256"),
         "upstream": manifest.get("upstream", {}),
         "abis": manifest.get("abis", []),
+        "checks": manifest.get("checks", []),
         "files": copied,
     }
 
@@ -210,7 +287,13 @@ def artifact_root(extracted: Path) -> Path:
     raise ArtifactError(f"Missing manifest.json in {extracted}")
 
 
-def import_release(tag: str, repo_root: Path, platforms: list[str], token: str | None) -> list[dict]:
+def import_release(
+    tag: str,
+    repo_root: Path,
+    platforms: list[str],
+    token: str | None,
+    contract: dict,
+) -> list[dict]:
     results = []
     with tempfile.TemporaryDirectory(prefix="qfli-git-release-") as work:
         workdir = Path(work)
@@ -220,19 +303,43 @@ def import_release(tag: str, repo_root: Path, platforms: list[str], token: str |
             extracted = workdir / platform
             extracted.mkdir()
             extract_zip(archive, extracted)
-            results.append(import_artifact(artifact_root(extracted), repo_root))
+            results.append(
+                import_artifact(artifact_root(extracted), repo_root, contract=contract)
+            )
     return results
 
 
-def write_lock(repo_root: Path, results: list[dict], tag: str | None) -> Path:
+def write_lock(
+    repo_root: Path,
+    results: list[dict],
+    tag: str | None,
+    contract: dict,
+    run: str | None = None,
+) -> Path:
+    api_versions = {result["apiVersion"] for result in results}
+    if api_versions != {contract["apiVersion"]}:
+        raise ArtifactError(
+            f"Imported artifacts report API versions {sorted(api_versions)}"
+        )
+    commits = {result["commit"] for result in results}
+    if len(commits) != 1:
+        raise ArtifactError(
+            "Artifacts came from different source commits: " + ", ".join(sorted(commits))
+        )
     lock = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "apiVersion": contract["apiVersion"],
+        "requiredExports": contract["requiredExports"],
+        "contractSha256": contract.get("sha256"),
         "source": {
             "repository": f"https://github.com/{REPOSITORY}",
             "release": tag,
+            "run": run,
+            "commit": next(iter(commits)),
             "commits": {result["platform"]: result["commit"] for result in results},
             "upstream": {result["platform"]: result["upstream"] for result in results},
         },
+        "checks": {result["platform"]: result["checks"] for result in results},
         "files": sorted(
             (entry for result in results for entry in result["files"]),
             key=lambda entry: entry["path"],
@@ -241,6 +348,25 @@ def write_lock(repo_root: Path, results: list[dict], tag: str | None) -> Path:
     path = repo_root / "native_libs.lock.json"
     path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def check_commit(value: str | None, label: str) -> str:
+    """Return a full 40-character hexadecimal commit, or raise."""
+    commit = (value or "").strip().lower()
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise ArtifactError(f"{label} must be a full 40-character commit: {value!r}")
+    return commit
+
+
+def check_run(value: str | None) -> str:
+    """Return an https provenance URL for the producing run, or raise."""
+    run = (value or "").strip()
+    if not run:
+        raise ArtifactError("Local artifact imports need a --run URL for provenance")
+    parsed = urllib.parse.urlparse(run)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ArtifactError(f"--run must be an https URL: {run!r}")
+    return run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,25 +382,48 @@ def main(argv: list[str] | None = None) -> int:
         help="limit a release import to these platforms",
     )
     parser.add_argument("--commit", help="require this source commit in every manifest")
+    parser.add_argument(
+        "--contract",
+        type=Path,
+        default=Path("tool/ci/native_contract.json"),
+        help="native_contract.json with the API version and required exports",
+    )
+    parser.add_argument(
+        "--run",
+        help="GitHub Actions run URL that produced the artifacts (or a release URL)",
+    )
     args = parser.parse_args(argv)
     repo_root = args.repo_root.resolve()
+    contract_path = args.contract
+    if not contract_path.is_absolute():
+        contract_path = repo_root / contract_path
     try:
+        contract = load_contract(contract_path)
+        contract["sha256"] = digest(contract_path)
         if args.release:
             platforms = args.platform or list(PLATFORM_ORDER)
             results = import_release(
-                args.release, repo_root, platforms, common_token()
+                args.release, repo_root, platforms, common_token(), contract
             )
         else:
+            # A local artifact directory carries no release tag, so the source
+            # commit and the producing run are the only provenance it has.
+            # Both are required, and both are validated for shape.
+            commit = check_commit(args.commit, "--commit")
+            run = check_run(args.run)
             results = [
-                import_artifact(artifact.resolve(), repo_root, args.commit)
+                import_artifact(artifact.resolve(), repo_root, commit, contract)
                 for artifact in args.artifact
             ]
-        lock = write_lock(repo_root, results, args.release)
+        lock = write_lock(repo_root, results, args.release, contract, args.run)
     except (ArtifactError, OSError, urllib.error.URLError, zipfile.BadZipFile) as error:
         print(f"import_artifacts: {error}", file=sys.stderr)
         return 1
     for result in results:
-        print(f"{result['platform']}: {len(result['files'])} files from {result['commit'][:12]}")
+        print(
+            f"{result['platform']}: {len(result['files'])} files from "
+            f"{result['commit'][:12]}, API {result['apiVersion']}"
+        )
     print(f"lock: {lock}")
     return 0
 

@@ -4,7 +4,11 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 
 /// Value returned by `qg_api_version`.
-const int qgApiVersion = 1;
+///
+/// Version 2 adds per-path staging, diff, history, branch, remote listing and
+/// remote URL updates. A library that reports an older version is rejected
+/// before any of the new symbols are looked up.
+const int qgApiVersion = 2;
 
 /// The operation observed a non-zero cancel flag and stopped.
 const int qgECanceled = -1000;
@@ -284,6 +288,66 @@ typedef _MergeCommitDart =
       ffi.Pointer<ffi.Uint8>,
       ffi.Pointer<QgError>,
     );
+typedef _PathsNative =
+    ffi.Int32 Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      ffi.Int32,
+      ffi.Pointer<QgError>,
+    );
+typedef _PathsDart =
+    int Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      int,
+      ffi.Pointer<QgError>,
+    );
+typedef _DiffJsonNative =
+    ffi.Int32 Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<Utf8>,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      ffi.Pointer<QgError>,
+    );
+typedef _DiffJsonDart =
+    int Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<Utf8>,
+      int,
+      int,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      ffi.Pointer<QgError>,
+    );
+typedef _LogJsonNative =
+    ffi.Int32 Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Int32,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      ffi.Pointer<QgError>,
+    );
+typedef _LogJsonDart =
+    int Function(
+      ffi.Pointer<QgRepo>,
+      int,
+      ffi.Pointer<ffi.Pointer<Utf8>>,
+      ffi.Pointer<QgError>,
+    );
+typedef _RemoteSetUrlNative =
+    ffi.Int32 Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<QgError>,
+    );
+typedef _RemoteSetUrlDart =
+    int Function(
+      ffi.Pointer<QgRepo>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<QgError>,
+    );
 typedef _JsonNative =
     ffi.Int32 Function(
       ffi.Pointer<QgRepo>,
@@ -349,6 +413,27 @@ class QfliGitBindings {
   );
   late final _mergeCommit = _library
       .lookupFunction<_MergeCommitNative, _MergeCommitDart>('qg_merge_commit');
+  late final _stagePaths = _library.lookupFunction<_PathsNative, _PathsDart>(
+    'qg_stage_paths',
+  );
+  late final _unstagePaths = _library.lookupFunction<_PathsNative, _PathsDart>(
+    'qg_unstage_paths',
+  );
+  late final _diffJson = _library
+      .lookupFunction<_DiffJsonNative, _DiffJsonDart>('qg_diff_json');
+  late final _logJson = _library.lookupFunction<_LogJsonNative, _LogJsonDart>(
+    'qg_log_json',
+  );
+  late final _branchesJson = _library.lookupFunction<_JsonNative, _JsonDart>(
+    'qg_branches_json',
+  );
+  late final _remotesJson = _library.lookupFunction<_JsonNative, _JsonDart>(
+    'qg_remotes_json',
+  );
+  late final _remoteSetUrl = _library
+      .lookupFunction<_RemoteSetUrlNative, _RemoteSetUrlDart>(
+        'qg_remote_set_url',
+      );
   late final _conflictsJson = _library.lookupFunction<_JsonNative, _JsonDart>(
     'qg_conflicts_json',
   );
@@ -363,6 +448,21 @@ class QfliGitBindings {
 
   /// `int qg_api_version(void)`
   int apiVersion() => _apiVersion();
+
+  /// Fails with a clear error before any version 2 symbol is looked up.
+  ///
+  /// [DynamicLibrary.lookupFunction] throws an opaque [ArgumentError] for a
+  /// missing symbol, so callers check the version first and report what the
+  /// stale library actually is.
+  void checkApiVersion() {
+    final version = apiVersion();
+    if (version != qgApiVersion) {
+      throw StateError(
+        'qfli_git reports API version $version, expected $qgApiVersion. '
+        'Rebuild or update the native library.',
+      );
+    }
+  }
 
   /// `const char *qg_libgit2_version(void)`
   String libgit2Version() => _libgit2Version().toDartString();
@@ -484,6 +584,67 @@ class QfliGitBindings {
     ffi.Pointer<ffi.Uint8> outOid,
     ffi.Pointer<QgError> err,
   ) => _mergeCommit(repo, message, name, email, outOid, err);
+
+  /// `int qg_stage_paths(qg_repo *repo, const char **paths, int count,
+  /// qg_error *err)`
+  int stagePaths(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<ffi.Pointer<Utf8>> paths,
+    int count,
+    ffi.Pointer<QgError> err,
+  ) => _stagePaths(repo, paths, count, err);
+
+  /// `int qg_unstage_paths(qg_repo *repo, const char **paths, int count,
+  /// qg_error *err)`
+  int unstagePaths(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<ffi.Pointer<Utf8>> paths,
+    int count,
+    ffi.Pointer<QgError> err,
+  ) => _unstagePaths(repo, paths, count, err);
+
+  /// `int qg_diff_json(qg_repo *repo, const char *path, int staged,
+  /// int max_bytes, char **out_json, qg_error *err)`
+  int diffJson(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<Utf8> path,
+    int staged,
+    int maxBytes,
+    ffi.Pointer<ffi.Pointer<Utf8>> outJson,
+    ffi.Pointer<QgError> err,
+  ) => _diffJson(repo, path, staged, maxBytes, outJson, err);
+
+  /// `int qg_log_json(qg_repo *repo, int limit, char **out_json,
+  /// qg_error *err)`
+  int logJson(
+    ffi.Pointer<QgRepo> repo,
+    int limit,
+    ffi.Pointer<ffi.Pointer<Utf8>> outJson,
+    ffi.Pointer<QgError> err,
+  ) => _logJson(repo, limit, outJson, err);
+
+  /// `int qg_branches_json(qg_repo *repo, char **out_json, qg_error *err)`
+  int branchesJson(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<ffi.Pointer<Utf8>> outJson,
+    ffi.Pointer<QgError> err,
+  ) => _branchesJson(repo, outJson, err);
+
+  /// `int qg_remotes_json(qg_repo *repo, char **out_json, qg_error *err)`
+  int remotesJson(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<ffi.Pointer<Utf8>> outJson,
+    ffi.Pointer<QgError> err,
+  ) => _remotesJson(repo, outJson, err);
+
+  /// `int qg_remote_set_url(qg_repo *repo, const char *name,
+  /// const char *url, qg_error *err)`
+  int remoteSetUrl(
+    ffi.Pointer<QgRepo> repo,
+    ffi.Pointer<Utf8> name,
+    ffi.Pointer<Utf8> url,
+    ffi.Pointer<QgError> err,
+  ) => _remoteSetUrl(repo, name, url, err);
 
   /// `int qg_conflicts_json(qg_repo *repo, char **out_json, qg_error *err)`
   int conflictsJson(

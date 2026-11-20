@@ -1,0 +1,38 @@
+// Adds Maven Central to every Gradle build in the invocation.
+//
+// The Flutter SDK's included build (project :gradle) declares only
+// plugins.gradle.org/m2 for its buildscript classpath. That portal does not
+// host kotlin-stdlib, kotlin-gradle-plugin or kotlin-gradle-plugins-bom for the
+// Kotlin version the Flutter tool template pins, so the Android example build
+// fails before any app code is compiled. Maven Central carries those modules.
+//
+// The script is applied with --init-script from the CI step, so it changes no
+// tracked Gradle file and no dependency version. Local builds are unaffected.
+def central = 'https://repo.maven.apache.org/maven2'
+
+beforeSettings { settings ->
+    settings.pluginManagement.repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+allprojects {
+    buildscript {
+        repositories {
+            maven { url = uri(central) }
+            mavenCentral()
+        }
+    }
+}
+
+gradle.allprojects { project ->
+    project.buildscript.repositories {
+        maven { url = uri(central) }
+        mavenCentral()
+    }
+    project.repositories {
+        maven { url = uri(central) }
+        mavenCentral()
+    }
+}
