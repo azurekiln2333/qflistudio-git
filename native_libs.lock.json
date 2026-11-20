@@ -1,20 +1,49 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "apiVersion": 2,
+  "requiredExports": [
+    "qg_api_version",
+    "qg_libgit2_version",
+    "qg_mbedtls_version",
+    "qg_init",
+    "qg_shutdown",
+    "qg_repo_init",
+    "qg_repo_open",
+    "qg_repo_free",
+    "qg_clone",
+    "qg_fetch",
+    "qg_push",
+    "qg_add_all",
+    "qg_stage_paths",
+    "qg_unstage_paths",
+    "qg_commit",
+    "qg_branch_create",
+    "qg_checkout_branch",
+    "qg_merge",
+    "qg_merge_commit",
+    "qg_conflicts_json",
+    "qg_diff_json",
+    "qg_log_json",
+    "qg_branches_json",
+    "qg_remotes_json",
+    "qg_remote_set_url",
+    "qg_status_json",
+    "qg_head_json",
+    "qg_string_free"
+  ],
+  "contractSha256": "4004ce5129808f6973ca4207f3b54d8800c55783a0eb353b41a2549d0b6e3b75",
   "source": {
     "repository": "https://github.com/azurekiln2333/qflistudio-git",
-    "release": "native-v0.1.1",
+    "release": null,
+    "run": "https://github.com/azurekiln2333/qflistudio-git/actions/runs/44802440226",
+    "commit": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
     "commits": {
-      "android": "85406ecf4e299c4ca0606b3b70540ca386dad6f0",
-      "ios": "85406ecf4e299c4ca0606b3b70540ca386dad6f0",
-      "ohos": "85406ecf4e299c4ca0606b3b70540ca386dad6f0"
+      "android": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
+      "ohos": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
+      "ios": "d002bd3e9febb478758b75b6670a24ba8a3c610c"
     },
     "upstream": {
       "android": {
-        "libgit2": "1.9.7",
-        "mbedtls": "3.6.8",
-        "cacert": "2026-11-05"
-      },
-      "ios": {
         "libgit2": "1.9.7",
         "mbedtls": "3.6.8",
         "cacert": "2026-11-05"
@@ -23,30 +52,326 @@
         "libgit2": "1.9.7",
         "mbedtls": "3.6.8",
         "cacert": "2026-11-05"
+      },
+      "ios": {
+        "libgit2": "1.9.7",
+        "mbedtls": "3.6.8",
+        "cacert": "2026-11-05"
       }
     }
+  },
+  "checks": {
+    "android": [
+      {
+        "abi": "arm64-v8a",
+        "kind": "elf",
+        "pageAlignment": 16384,
+        "loadAlignments": [
+          16384,
+          16384,
+          16384
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      },
+      {
+        "abi": "armeabi-v7a",
+        "kind": "elf",
+        "pageAlignment": 16384,
+        "loadAlignments": [
+          16384,
+          16384,
+          16384
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      },
+      {
+        "abi": "x86_64",
+        "kind": "elf",
+        "pageAlignment": 16384,
+        "loadAlignments": [
+          16384,
+          16384,
+          16384
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      }
+    ],
+    "ohos": [
+      {
+        "abi": "arm64-v8a",
+        "kind": "elf",
+        "pageAlignment": 16384,
+        "loadAlignments": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      },
+      {
+        "abi": "x86_64",
+        "kind": "elf",
+        "pageAlignment": 16384,
+        "loadAlignments": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      }
+    ],
+    "ios": [
+      {
+        "abi": "ios",
+        "kind": "xcframework",
+        "slices": [
+          "ios-arm64",
+          "ios-arm64_x86_64-simulator"
+        ]
+      },
+      {
+        "abi": "ios-arm64",
+        "kind": "macho",
+        "architectures": [],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      },
+      {
+        "abi": "ios-arm64_x86_64-simulator",
+        "kind": "macho",
+        "architectures": [
+          "x86_64",
+          "arm64"
+        ],
+        "exportedSymbols": [
+          "qg_add_all",
+          "qg_api_version",
+          "qg_branch_create",
+          "qg_branches_json",
+          "qg_checkout_branch",
+          "qg_clone",
+          "qg_commit",
+          "qg_conflicts_json",
+          "qg_diff_json",
+          "qg_fetch",
+          "qg_head_json",
+          "qg_init",
+          "qg_libgit2_version",
+          "qg_log_json",
+          "qg_mbedtls_version",
+          "qg_merge",
+          "qg_merge_commit",
+          "qg_push",
+          "qg_remote_set_url",
+          "qg_remotes_json",
+          "qg_repo_free",
+          "qg_repo_init",
+          "qg_repo_open",
+          "qg_shutdown",
+          "qg_stage_paths",
+          "qg_status_json",
+          "qg_string_free",
+          "qg_unstage_paths"
+        ]
+      }
+    ]
   },
   "files": [
     {
       "path": "android/src/main/jniLibs/arm64-v8a/libqfli_git.so",
       "platform": "android",
       "abi": "arm64-v8a",
-      "bytes": 1792184,
-      "sha256": "5dc3632c29c22d307ecc5e269c75826e9649ee585de208e8d60986a4e6305482"
+      "bytes": 1813960,
+      "sha256": "a84501356975cb79ed01cc4ee1a31953fe9aafb4a1d4ddd4d95e6c85c761286d"
     },
     {
       "path": "android/src/main/jniLibs/armeabi-v7a/libqfli_git.so",
       "platform": "android",
       "abi": "armeabi-v7a",
-      "bytes": 1314556,
-      "sha256": "34c7c2884e163f479c00dc18e8c28e0615b9cbdbef6d2737010d1fe26655c2af"
+      "bytes": 1330060,
+      "sha256": "7d96c605bb086bcbad2875ab1ad521877f446d4729f3f7344d082400c98c1e7b"
     },
     {
       "path": "android/src/main/jniLibs/x86_64/libqfli_git.so",
       "platform": "android",
       "abi": "x86_64",
-      "bytes": 1879120,
-      "sha256": "bd89fcfcba5e5a61c8514dc340446a309b7bad1fb38d85f505b55623fd6474fd"
+      "bytes": 1901760,
+      "sha256": "3dbf0763eff0ba1cfcdf25c1a7c2bd56640c4ac1b2551ff8b1122b80fcd03d87"
     },
     {
       "path": "ios/Frameworks/qfli_git.xcframework/Info.plist",
@@ -66,8 +391,8 @@
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64/qfli_git.framework/qfli_git",
       "platform": "ios",
       "abi": null,
-      "bytes": 1554456,
-      "sha256": "ca1082fa55474c87f94b1d21e0d19df851bb8254d6deaf4627815e9e1f9e73ce"
+      "bytes": 1587680,
+      "sha256": "bc0064211dfb7bd5d1ef9a69e944e3a45551b80f8c99400859a8071c0df809c1"
     },
     {
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64_x86_64-simulator/qfli_git.framework/Info.plist",
@@ -80,22 +405,22 @@
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64_x86_64-simulator/qfli_git.framework/qfli_git",
       "platform": "ios",
       "abi": null,
-      "bytes": 3237704,
-      "sha256": "39043795825e9423a752aea55e1a0fe0a3d6ae18eadcb1cf91dd8d35558570bc"
+      "bytes": 3271048,
+      "sha256": "96e449b199d814fde460bb6848db2c7275a2c1531adf0a4f5104561f180ff2f1"
     },
     {
       "path": "ohos/libs/arm64-v8a/libqfli_git.so",
       "platform": "ohos",
       "abi": "arm64-v8a",
-      "bytes": 2133776,
-      "sha256": "4ca9c98b07903012ae18a298d9500e4725e03326731ac0960f19db825f55bdc9"
+      "bytes": 2160552,
+      "sha256": "3fb3664e6975d36df3af6512e27095a5e2e4d1b2bc7b770fde3affe8efb8eb58"
     },
     {
       "path": "ohos/libs/x86_64/libqfli_git.so",
       "platform": "ohos",
       "abi": "x86_64",
-      "bytes": 1914728,
-      "sha256": "bac1f05d6a4919359fd884afa7f0b3545437452e946767ce421259def8c3b299"
+      "bytes": 1940552,
+      "sha256": "82ecb0865ece8825669a96ea70fbed77a1c41c181dc186d5c36a10d9ce70ac47"
     }
   ]
 }

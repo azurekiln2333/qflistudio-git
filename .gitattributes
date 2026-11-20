@@ -14,3 +14,9 @@
 # Prebuilt native libraries imported from CI releases.
 *.so binary
 ios/Frameworks/qfli_git.xcframework/**/qfli_git binary
+
+# These files are fingerprinted byte-for-byte by the native contract/lock.
+assets/cacert.pem text eol=lf
+tool/ci/native_contract.json text eol=lf
+native_libs.lock.json text eol=lf
+ios/Frameworks/qfli_git.xcframework/**/Info.plist text eol=lf
