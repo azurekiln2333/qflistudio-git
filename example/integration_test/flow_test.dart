@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,11 @@ import 'package:qfli_git/qfli_git.dart';
 /// A seeded repository stands in for the upstream host. The plugin clones it,
 /// commits, branches, merges with a conflict, commits the merge and pushes into
 /// a bare repository.
+///
+/// Local directories are passed as `file://` URLs. The plugin rejects a bare
+/// path as a remote URL, because a remote must name a transport, and an
+/// absolute path is ambiguous on the platforms that also accept a drive or a
+/// Windows share.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -22,11 +28,15 @@ void main() {
   late String workPath;
 
   setUpAll(() async {
+    _mark('setup: ensureInitialized start');
     await QfliGit.ensureInitialized();
+    _mark('setup: ensureInitialized done');
+
     root = await _freshDirectory('qfli_git_flow_test');
     sourcePath = p.join(root.path, 'source');
     barePath = p.join(root.path, 'remote.git');
     workPath = p.join(root.path, 'work');
+    _mark('setup: directories created');
 
     // The source repository holds the first commit, so the clone has content
     // and a default branch.
@@ -34,11 +44,14 @@ void main() {
     File(p.join(source.path, 'flow.txt')).writeAsStringSync('base\n');
     await source.addAll();
     await source.commit('base commit', author);
+    _mark('setup: source commit done');
 
     await GitRepository.init(barePath, bare: true);
+    _mark('setup: bare repository init done');
   });
 
   tearDownAll(() {
+    _mark('teardown: removing fixture directory');
     if (root.existsSync()) {
       root.deleteSync(recursive: true);
     }
@@ -47,7 +60,12 @@ void main() {
   testWidgets('clone, branch, conflict merge, merge commit, push', (
     WidgetTester tester,
   ) async {
-    final repo = await GitRepository.clone(url: sourcePath, path: workPath);
+    _mark('stage: clone start');
+    final repo = await GitRepository.clone(
+      url: Uri.directory(sourcePath).toString(),
+      path: workPath,
+    );
+    _mark('stage: clone done');
 
     final baseHead = await repo.head();
     expect(baseHead.branch, isNotNull);
@@ -71,9 +89,12 @@ void main() {
     await repo.addAll();
     final mainCommit = await repo.commit('main change', author);
     expect(mainCommit, isNot(featureCommit));
+    _mark('stage: diverged branch created');
 
+    _mark('stage: merge start');
     final outcome = await repo.merge('feature', author);
     expect(outcome, MergeOutcome.conflicts);
+    _mark('stage: merge done with conflicts');
 
     final mergeHead = await repo.head();
     expect(mergeHead.state, 'merge');
@@ -96,6 +117,7 @@ void main() {
 
     final mergeCommit = await repo.commitMerge('merge feature', author);
     expect(mergeCommit, hasLength(40));
+    _mark('stage: merge commit done');
 
     final mergedHead = await repo.head();
     expect(mergedHead.oid, mergeCommit);
@@ -104,17 +126,28 @@ void main() {
     final status = await repo.status();
     expect(status, isEmpty);
 
-    _addRemote(File(p.join(repo.path, '.git', 'config')), 'bare', barePath);
+    _addRemote(
+      File(p.join(repo.path, '.git', 'config')),
+      'bare',
+      Uri.directory(barePath).toString(),
+    );
+    _mark('stage: push start');
     await repo.push(
       remote: 'bare',
       refspec: 'refs/heads/$mainBranch:refs/heads/$mainBranch',
     );
+    _mark('stage: push done');
 
     final remote = GitRepository.open(barePath);
     final remoteHead = await remote.head();
     expect(remoteHead.oid, mergeCommit);
+    _mark('stage: remote verified');
   });
 }
+
+/// Writes a marker to the device log so a cloud run that stops early can be
+/// attributed to one stage. debugPrint keeps `avoid_print` quiet.
+void _mark(String stage) => debugPrint('[qfli-git-flow] $stage');
 
 /// Replaces conflict markers with the concatenation of both sides.
 void _resolveByConcatenation(File file) {
