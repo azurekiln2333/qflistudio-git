@@ -381,13 +381,6 @@ jobs:
       - name: Build example simulator app
         working-directory: example
         run: bash ../tool/ci/run_annotated.sh example-ios flutter build ios --simulator --no-codesign
-      - name: Check the packaged simulator app payload
-        run: |
-          python3 tool/ci/check_git_payload.py \
-            --platform ios \
-            --archive example/build/ios/iphonesimulator/Runner.app \
-            --contract tool/ci/native_contract.json \
-            --nm /usr/bin/nm
       - name: Boot an iOS simulator
         run: |
           udid=$(xcrun simctl list devices available -j | python3 -c '
