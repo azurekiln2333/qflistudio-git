@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "apiVersion": 2,
+  "apiVersion": 3,
   "requiredExports": [
     "qg_api_version",
     "qg_libgit2_version",
@@ -11,6 +11,7 @@
     "qg_repo_open",
     "qg_repo_free",
     "qg_clone",
+    "qg_clone_with_progress",
     "qg_fetch",
     "qg_push",
     "qg_add_all",
@@ -31,16 +32,16 @@
     "qg_head_json",
     "qg_string_free"
   ],
-  "contractSha256": "4004ce5129808f6973ca4207f3b54d8800c55783a0eb353b41a2549d0b6e3b75",
+  "contractSha256": "d12d803c7ec7fc6d6ccb3d3abbb705b9748452da1873de86a699e37459c4486a",
   "source": {
     "repository": "https://github.com/azurekiln2333/qflistudio-git",
     "release": null,
-    "run": "https://github.com/azurekiln2333/qflistudio-git/actions/runs/44802440226",
-    "commit": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
+    "run": "https://github.com/azurekiln2333/qflistudio-git/actions/runs/44863517943",
+    "commit": "194a6c9dd70873a472e441b67875766541572372",
     "commits": {
-      "android": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
-      "ohos": "d002bd3e9febb478758b75b6670a24ba8a3c610c",
-      "ios": "d002bd3e9febb478758b75b6670a24ba8a3c610c"
+      "android": "194a6c9dd70873a472e441b67875766541572372",
+      "ohos": "194a6c9dd70873a472e441b67875766541572372",
+      "ios": "194a6c9dd70873a472e441b67875766541572372"
     },
     "upstream": {
       "android": {
@@ -78,6 +79,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -118,6 +120,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -158,6 +161,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -201,6 +205,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -242,6 +247,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -287,6 +293,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -325,6 +332,7 @@
           "qg_branches_json",
           "qg_checkout_branch",
           "qg_clone",
+          "qg_clone_with_progress",
           "qg_commit",
           "qg_conflicts_json",
           "qg_diff_json",
@@ -356,22 +364,22 @@
       "path": "android/src/main/jniLibs/arm64-v8a/libqfli_git.so",
       "platform": "android",
       "abi": "arm64-v8a",
-      "bytes": 1813960,
-      "sha256": "a84501356975cb79ed01cc4ee1a31953fe9aafb4a1d4ddd4d95e6c85c761286d"
+      "bytes": 1819248,
+      "sha256": "5bd07ec1379fbb6b7243aaba706055a96c0069c147a35bb7a529787cde94d332"
     },
     {
       "path": "android/src/main/jniLibs/armeabi-v7a/libqfli_git.so",
       "platform": "android",
       "abi": "armeabi-v7a",
-      "bytes": 1330060,
-      "sha256": "7d96c605bb086bcbad2875ab1ad521877f446d4729f3f7344d082400c98c1e7b"
+      "bytes": 1333740,
+      "sha256": "90a47f12c14753cb82c63be8722267ef062608cf77562212c3ea5ee390620d0b"
     },
     {
       "path": "android/src/main/jniLibs/x86_64/libqfli_git.so",
       "platform": "android",
       "abi": "x86_64",
-      "bytes": 1901760,
-      "sha256": "3dbf0763eff0ba1cfcdf25c1a7c2bd56640c4ac1b2551ff8b1122b80fcd03d87"
+      "bytes": 1906112,
+      "sha256": "b745270b1c44555cad7a3c5349884a4883ea13379baa1d246878f5bbfb048bea"
     },
     {
       "path": "ios/Frameworks/qfli_git.xcframework/Info.plist",
@@ -391,8 +399,8 @@
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64/qfli_git.framework/qfli_git",
       "platform": "ios",
       "abi": null,
-      "bytes": 1587680,
-      "sha256": "bc0064211dfb7bd5d1ef9a69e944e3a45551b80f8c99400859a8071c0df809c1"
+      "bytes": 1587768,
+      "sha256": "d702e53b166d357f93009e33add37a99b0d0569b085f167a64fa5ca73addc9b8"
     },
     {
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64_x86_64-simulator/qfli_git.framework/Info.plist",
@@ -405,22 +413,22 @@
       "path": "ios/Frameworks/qfli_git.xcframework/ios-arm64_x86_64-simulator/qfli_git.framework/qfli_git",
       "platform": "ios",
       "abi": null,
-      "bytes": 3271048,
-      "sha256": "96e449b199d814fde460bb6848db2c7275a2c1531adf0a4f5104561f180ff2f1"
+      "bytes": 3271144,
+      "sha256": "117a71810600054aa41ba21fadda7d8af4ffa20ee4056c0666d294fa60db4b3b"
     },
     {
       "path": "ohos/libs/arm64-v8a/libqfli_git.so",
       "platform": "ohos",
       "abi": "arm64-v8a",
-      "bytes": 2160552,
-      "sha256": "3fb3664e6975d36df3af6512e27095a5e2e4d1b2bc7b770fde3affe8efb8eb58"
+      "bytes": 2166616,
+      "sha256": "59779edca3f721eb397f62f13c681a6f6bb9edf19d3f5addc8b3f07ff19c93d2"
     },
     {
       "path": "ohos/libs/x86_64/libqfli_git.so",
       "platform": "ohos",
       "abi": "x86_64",
-      "bytes": 1940552,
-      "sha256": "82ecb0865ece8825669a96ea70fbed77a1c41c181dc186d5c36a10d9ce70ac47"
+      "bytes": 1944568,
+      "sha256": "e70e3c72aab2f317da84bfbff4b5fabfed332391a4121225ecfe7c7dc338f6ba"
     }
   ]
 }

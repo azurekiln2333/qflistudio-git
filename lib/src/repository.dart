@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -11,6 +12,27 @@ import 'package:path_provider/path_provider.dart';
 
 import 'bindings.dart';
 import 'library.dart';
+
+/// Clone stages measured by libgit2.
+enum GitCloneStage { receiving, resolving, checkout }
+
+/// Numeric progress for one clone operation. No remote or file paths are sent.
+class GitCloneProgress {
+  const GitCloneProgress({
+    required this.stage,
+    this.completed = 0,
+    this.total = 0,
+    this.receivedBytes = 0,
+  });
+
+  final GitCloneStage stage;
+  final int completed;
+  final int total;
+  final int receivedBytes;
+
+  double? get fraction =>
+      total <= 0 ? null : (completed / total).clamp(0.0, 1.0);
+}
 
 /// Author identity stored in new commits and merge commits.
 class GitAuthor {
@@ -492,10 +514,11 @@ class QfliGit {
   static const String _caFileName = 'cacert.pem';
 
   static String? _caFile;
+  static Future<void>? _initializing;
 
   /// Absolute path of the CA bundle written by [ensureInitialized].
   ///
-  /// Background isolates read this value and hand it to `qg_init`.
+  /// The foreground installs certificates once before repository workers run.
   static String? get caFile => _caFile;
 
   /// Copies the bundled CA certificates to the application support directory
@@ -503,10 +526,16 @@ class QfliGit {
   ///
   /// Call it once before the first repository operation. Repeated calls do
   /// nothing.
-  static Future<void> ensureInitialized() async {
+  static Future<void> ensureInitialized() {
     if (_caFile != null) {
-      return;
+      return Future<void>.value();
     }
+    return _initializing ??= _prepareCertificates().whenComplete(() {
+      _initializing = null;
+    });
+  }
+
+  static Future<void> _prepareCertificates() async {
     final data = await rootBundle.load(_caAssetKey);
     final directory = await getApplicationSupportDirectory();
     final file = File(p.join(directory.path, _caFileName));
@@ -573,56 +602,52 @@ class GitRepository {
     String? username,
     String? token,
     CancelToken? cancel,
+    void Function(GitCloneProgress progress)? onProgress,
   }) async {
     final cloneUrl = _validateRemoteUrl(url);
     final target = _absolute(path);
-    final caFile = QfliGit.caFile;
     final cancelAddress = cancel?.acquireOperation();
+    final receivePort = onProgress == null ? null : ReceivePort();
+    final drained = Completer<void>();
+    receivePort?.listen((event) {
+      if (event == null) {
+        if (!drained.isCompleted) drained.complete();
+        return;
+      }
+      if (event is! List<int> || event.length != 4) return;
+      final stage = switch (event[0]) {
+        1 => GitCloneStage.receiving,
+        2 => GitCloneStage.resolving,
+        3 => GitCloneStage.checkout,
+        _ => null,
+      };
+      if (stage == null) return;
+      try {
+        onProgress?.call(
+          GitCloneProgress(
+            stage: stage,
+            completed: event[1],
+            total: event[2],
+            receivedBytes: event[3],
+          ),
+        );
+      } on Object {
+        // Observers cannot change the operation result.
+      }
+    });
     try {
-      return await Isolate.run(() {
-        final bindings = QfliGitBindings(openQfliGitLibrary());
-        Pointer<QgError> error = nullptr;
-        Pointer<Pointer<QgRepo>> out = nullptr;
-        try {
-          error = calloc<QgError>();
-          out = calloc<Pointer<QgRepo>>();
-          final cancelFlag = _cancelPointer(cancelAddress);
-          bindings.checkApiVersion();
-          _initIfNeeded(bindings, caFile, error);
-          return _withUtf8([cloneUrl, target, username, token], (values) {
-            final code = bindings.clone(
-              values[0],
-              values[1],
-              values[2],
-              values[3],
-              cancelFlag,
-              out,
-              error,
-            );
-            if (code != 0) {
-              throw GitException.fromNative(NativeError.read(error, code));
-            }
-            final repo = out.value;
-            if (repo == nullptr) {
-              throw const GitException(
-                qgEInvalid,
-                0,
-                'qg_clone returned no handle',
-              );
-            }
-            bindings.repoFree(repo);
-            return GitRepository._(target);
-          });
-        } finally {
-          if (out != nullptr) {
-            calloc.free(out);
-          }
-          if (error != nullptr) {
-            calloc.free(error);
-          }
-        }
-      });
+      final result = await _runCloneIsolate(
+        cloneUrl,
+        target,
+        username,
+        token,
+        cancelAddress,
+        receivePort?.sendPort,
+      );
+      if (receivePort != null) await drained.future;
+      return result;
     } finally {
+      receivePort?.close();
       cancel?.releaseOperation();
     }
   }
@@ -1164,22 +1189,129 @@ T _withRepo<T>(
   }
 }
 
-/// Calls `qg_init` for every operation.
-///
-/// A null [caFile] still initializes libgit2. The CA bundle is optional, so a
-/// caller that skipped [QfliGit.ensureInitialized] gets a working library
-/// without certificates instead of an uninitialized one.
+// Keep the Isolate.run closure outside the caller's scope: UI observers and
+// ReceivePorts must never be captured by the background computation.
+Future<GitRepository> _runCloneIsolate(
+  String url,
+  String target,
+  String? username,
+  String? token,
+  int? cancelAddress,
+  SendPort? progressPort,
+) => Isolate.run(
+  () =>
+      _cloneInWorker(url, target, username, token, cancelAddress, progressPort),
+);
+
+GitRepository _cloneInWorker(
+  String url,
+  String target,
+  String? username,
+  String? token,
+  int? cancelAddress,
+  SendPort? progressPort,
+) {
+  QfliGitBindings? bindings;
+  Pointer<QgError> error = nullptr;
+  Pointer<Pointer<QgRepo>> out = nullptr;
+  NativeCallable<CloneProgressNative>? callback;
+  final reporter = progressPort == null
+      ? null
+      : _CloneProgressReporter(progressPort);
+  try {
+    bindings = QfliGitBindings(openQfliGitLibrary());
+    error = calloc<QgError>();
+    out = calloc<Pointer<QgRepo>>();
+    bindings.checkApiVersion();
+    _initIfNeeded(bindings, null, error);
+    if (reporter != null) {
+      // libgit2 invokes transfer/checkout callbacks synchronously on this
+      // isolate's calling thread. Keep the callable alive until clone returns.
+      callback = NativeCallable<CloneProgressNative>.isolateLocal((
+        int stage,
+        int completed,
+        int total,
+        int bytes,
+        Pointer<Void> _,
+      ) {
+        reporter.add(stage, completed, total, bytes);
+      });
+    }
+    return _withUtf8([url, target, username, token], (values) {
+      final code = bindings!.cloneWithProgress(
+        values[0],
+        values[1],
+        values[2],
+        values[3],
+        _cancelPointer(cancelAddress),
+        callback?.nativeFunction ?? nullptr,
+        nullptr,
+        out,
+        error,
+      );
+      if (code != 0) {
+        throw GitException.fromNative(NativeError.read(error, code));
+      }
+      if (out.value == nullptr) {
+        throw const GitException(qgEInvalid, 0, 'qg_clone returned no handle');
+      }
+      return GitRepository._(target);
+    });
+  } finally {
+    callback?.close();
+    if (out != nullptr) {
+      if (out.value != nullptr) bindings?.repoFree(out.value);
+      calloc.free(out);
+    }
+    if (error != nullptr) calloc.free(error);
+    reporter?.flush();
+    // Same-port FIFO gives the foreground a barrier after the last progress.
+    progressPort?.send(null);
+  }
+}
+
+/// Throttles while synchronous FFI owns the isolate. A timer cannot run there.
+class _CloneProgressReporter {
+  _CloneProgressReporter(this.port);
+
+  final SendPort port;
+  final Stopwatch _sinceLast = Stopwatch()..start();
+  List<int>? _last;
+  List<int>? _pending;
+
+  void add(int stage, int completed, int total, int bytes) {
+    final event = <int>[stage, completed, total, bytes];
+    if (_last != null && listEquals(_last, event)) return;
+    _pending = event;
+    if (_last == null ||
+        _last![0] != stage ||
+        (total > 0 && completed >= total) ||
+        _sinceLast.elapsedMilliseconds >= 100) {
+      flush();
+    }
+  }
+
+  void flush() {
+    final event = _pending;
+    if (event == null) return;
+    port.send(event);
+    _last = event;
+    _pending = null;
+    _sinceLast.reset();
+  }
+}
+
+/// Retains libgit2 initialization without replacing its process-wide TLS CA.
+/// Replacing that CA while another repository uses it would race live TLS.
 void _initIfNeeded(
   QfliGitBindings bindings,
-  String? caFile,
+  String? _,
   Pointer<QgError> error,
 ) {
-  _withUtf8([caFile], (values) {
-    final code = bindings.init(values[0], error);
-    if (code != 0) {
-      throw GitException.fromNative(NativeError.read(error, code));
-    }
-  });
+  final code = bindings.init(nullptr, error);
+  if (code != 0) {
+    throw GitException.fromNative(NativeError.read(error, code));
+  }
 }
 
 /// Builds the cancel pointer handed to the native layer.

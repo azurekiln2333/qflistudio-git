@@ -5,10 +5,9 @@ import 'package:ffi/ffi.dart';
 
 /// Value returned by `qg_api_version`.
 ///
-/// Version 2 adds per-path staging, diff, history, branch, remote listing and
-/// remote URL updates. A library that reports an older version is rejected
-/// before any of the new symbols are looked up.
-const int qgApiVersion = 2;
+/// Version 3 adds clone progress through a new symbol while retaining the
+/// legacy `qg_clone` ABI.
+const int qgApiVersion = 3;
 
 /// The operation observed a non-zero cancel flag and stopped.
 const int qgECanceled = -1000;
@@ -169,6 +168,39 @@ typedef _CloneDart =
       ffi.Pointer<ffi.Pointer<QgRepo>>,
       ffi.Pointer<QgError>,
     );
+typedef CloneProgressNative =
+    ffi.Void Function(
+      ffi.Int32 stage,
+      ffi.Uint32 completed,
+      ffi.Uint32 total,
+      ffi.Uint64 receivedBytes,
+      ffi.Pointer<ffi.Void> payload,
+    );
+typedef _CloneProgressCallNative =
+    ffi.Int32 Function(
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<ffi.Int32>,
+      ffi.Pointer<ffi.NativeFunction<CloneProgressNative>>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Pointer<QgRepo>>,
+      ffi.Pointer<QgError>,
+    );
+typedef _CloneProgressCallDart =
+    int Function(
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<ffi.Int32>,
+      ffi.Pointer<ffi.NativeFunction<CloneProgressNative>>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Pointer<QgRepo>>,
+      ffi.Pointer<QgError>,
+    );
+
 typedef _FetchNative =
     ffi.Int32 Function(
       ffi.Pointer<QgRepo>,
@@ -390,6 +422,10 @@ class QfliGitBindings {
   late final _clone = _library.lookupFunction<_CloneNative, _CloneDart>(
     'qg_clone',
   );
+  late final _cloneWithProgress = _library
+      .lookupFunction<_CloneProgressCallNative, _CloneProgressCallDart>(
+        'qg_clone_with_progress',
+      );
   late final _fetch = _library.lookupFunction<_FetchNative, _FetchDart>(
     'qg_fetch',
   );
@@ -506,6 +542,32 @@ class QfliGitBindings {
     ffi.Pointer<ffi.Pointer<QgRepo>> out,
     ffi.Pointer<QgError> err,
   ) => _clone(url, path, username, token, cancelFlag, out, err);
+
+  /// `int qg_clone_with_progress(const char *url, const char *path,
+  /// const char *username, const char *token, const int32_t *cancel_flag,
+  /// qg_clone_progress_cb progress, void *payload, qg_repo **out,
+  /// qg_error *err)`
+  int cloneWithProgress(
+    ffi.Pointer<Utf8> url,
+    ffi.Pointer<Utf8> path,
+    ffi.Pointer<Utf8> username,
+    ffi.Pointer<Utf8> token,
+    ffi.Pointer<ffi.Int32> cancelFlag,
+    ffi.Pointer<ffi.NativeFunction<CloneProgressNative>> progress,
+    ffi.Pointer<ffi.Void> payload,
+    ffi.Pointer<ffi.Pointer<QgRepo>> out,
+    ffi.Pointer<QgError> err,
+  ) => _cloneWithProgress(
+    url,
+    path,
+    username,
+    token,
+    cancelFlag,
+    progress,
+    payload,
+    out,
+    err,
+  );
 
   /// `int qg_fetch(qg_repo *repo, const char *remote, const char *username,
   /// const char *token, const int32_t *cancel_flag, qg_error *err)`

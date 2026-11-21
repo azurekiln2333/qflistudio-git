@@ -18,6 +18,8 @@ export 'src/repository.dart'
         CancelToken,
         GitAuthor,
         GitBranch,
+        GitCloneProgress,
+        GitCloneStage,
         GitCommit,
         GitDiff,
         GitException,

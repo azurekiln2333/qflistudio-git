@@ -498,7 +498,9 @@ class ImportTests(unittest.TestCase):
         """The tracked contract must describe the tracked public API."""
         repo = Path(__file__).resolve().parents[2]
         contract = import_module.load_contract(repo / "tool/ci/native_contract.json")
-        self.assertEqual(contract["apiVersion"], 2)
+        self.assertEqual(contract["apiVersion"], 3)
+        self.assertIn("qg_clone", contract["requiredExports"])
+        self.assertIn("qg_clone_with_progress", contract["requiredExports"])
         header = (repo / "native/include/qfli_git.h").read_text(encoding="utf-8")
         for name in contract["requiredExports"]:
             self.assertIn(name, header)

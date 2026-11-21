@@ -267,6 +267,125 @@ void main() {
     expect(remotes.single.url, isNot(contains('@')));
   });
 
+  Future<String> createCloneSource(String name) async {
+    final sourcePath = '${root.path}/$name';
+    final source = await GitRepository.init(sourcePath);
+    for (var index = 0; index < 24; index++) {
+      await File(
+        '$sourcePath/file-$index.txt',
+      ).writeAsString('clone progress fixture $index\n');
+    }
+    await source.addAll();
+    await source.commit('seed clone source', author);
+    return sourcePath;
+  }
+
+  test(
+    'two parallel file clones isolate progress and drain checkout first',
+    () async {
+      final sourcePath = await createCloneSource('parallel-source');
+      final firstPath = '${root.path}/parallel-first';
+      final secondPath = '${root.path}/parallel-second';
+      final firstProgress = <GitCloneProgress>[];
+      final secondProgress = <GitCloneProgress>[];
+
+      final clones = Future.wait([
+        GitRepository.clone(
+          url: Uri.directory(sourcePath).toString(),
+          path: firstPath,
+          onProgress: firstProgress.add,
+        ),
+        GitRepository.clone(
+          url: Uri.directory(sourcePath).toString(),
+          path: secondPath,
+          onProgress: secondProgress.add,
+        ),
+      ]).timeout(const Duration(seconds: 45));
+      final repositories = await clones;
+
+      expect(repositories.map((repository) => repository.path), [
+        firstPath,
+        secondPath,
+      ]);
+      expect(File('$firstPath/file-0.txt').existsSync(), isTrue);
+      expect(File('$secondPath/file-0.txt').existsSync(), isTrue);
+
+      for (final progress in [firstProgress, secondProgress]) {
+        final checkout = progress
+            .where((event) => event.stage == GitCloneStage.checkout)
+            .toList();
+        expect(checkout, isNotEmpty);
+        expect(checkout.last.total, greaterThan(0));
+        expect(checkout.last.completed, checkout.last.total);
+      }
+    },
+  );
+
+  test('a throwing progress observer cannot fail a successful clone', () async {
+    final sourcePath = await createCloneSource('observer-source');
+    final targetPath = '${root.path}/observer-clone';
+    var observed = 0;
+
+    final repository = await GitRepository.clone(
+      url: Uri.directory(sourcePath).toString(),
+      path: targetPath,
+      onProgress: (_) {
+        observed++;
+        throw StateError('observer failure');
+      },
+    ).timeout(const Duration(seconds: 45));
+
+    expect(observed, greaterThan(0));
+    expect(repository.path, targetPath);
+    expect(File('$targetPath/file-0.txt').existsSync(), isTrue);
+  });
+
+  test('a canceled clone does not affect a parallel clone', () async {
+    final sourcePath = await createCloneSource('cancel-source');
+    final canceledPath = '${root.path}/canceled-clone';
+    final successfulPath = '${root.path}/successful-clone';
+    final canceled = CancelToken()..cancel();
+
+    // Attach the expectation before starting the second operation so a quick
+    // cancellation cannot become an unhandled asynchronous error.
+    final canceledClone = GitRepository.clone(
+      url: Uri.directory(sourcePath).toString(),
+      path: canceledPath,
+      cancel: canceled,
+    );
+    final canceledError = expectLater(
+      canceledClone,
+      throwsA(
+        isA<GitException>().having(
+          (error) => error.isCanceled,
+          'isCanceled',
+          isTrue,
+        ),
+      ),
+    );
+
+    GitRepository? successfulRepository;
+    final successfulClone =
+        GitRepository.clone(
+          url: Uri.directory(sourcePath).toString(),
+          path: successfulPath,
+        ).then((repository) {
+          successfulRepository = repository;
+          return repository;
+        });
+
+    try {
+      await Future.wait<void>([
+        canceledError,
+        successfulClone.then<void>((_) {}),
+      ]).timeout(const Duration(seconds: 45));
+      expect(successfulRepository, isNotNull);
+      expect(File('$successfulPath/file-0.txt').existsSync(), isTrue);
+    } finally {
+      canceled.dispose();
+    }
+  });
+
   test('branches and log carry the metadata the UI renders', () async {
     final path = '${root.path}/history';
     await GitRepository.init(path);
