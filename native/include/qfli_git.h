@@ -35,7 +35,7 @@ extern "C" {
 #define QG_API
 #endif
 
-#define QG_API_VERSION 2
+#define QG_API_VERSION 3
 
 #define QG_ECANCELED (-1000)
 #define QG_ECONFLICT (-1001) /* merge commit still has conflicts */
@@ -48,6 +48,12 @@ typedef struct qg_error {
 } qg_error;
 
 typedef struct qg_repo qg_repo;
+
+/* Numeric clone progress on the calling thread. Stage 1 receives objects,
+ * stage 2 resolves deltas, stage 3 checks out files. Payload stays caller-owned
+ * until qg_clone_with_progress returns. No strings or credentials are sent. */
+typedef void (*qg_clone_progress_cb)(int stage, uint32_t completed, uint32_t total,
+                                    uint64_t received_bytes, void *payload);
 
 QG_API int qg_api_version(void);
 QG_API const char *qg_libgit2_version(void); /* static string, e.g. "1.9.7" */
@@ -62,6 +68,9 @@ QG_API void qg_repo_free(qg_repo *repo);
 
 QG_API int qg_clone(const char *url, const char *path, const char *username, const char *token,
              const int32_t *cancel_flag, qg_repo **out, qg_error *err);
+QG_API int qg_clone_with_progress(const char *url, const char *path, const char *username,
+             const char *token, const int32_t *cancel_flag, qg_clone_progress_cb progress,
+             void *payload, qg_repo **out, qg_error *err);
 QG_API int qg_fetch(qg_repo *repo, const char *remote, const char *username, const char *token,
              const int32_t *cancel_flag, qg_error *err);
 QG_API int qg_push(qg_repo *repo, const char *remote, const char *refspec, const char *username,

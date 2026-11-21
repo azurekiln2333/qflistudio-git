@@ -230,6 +230,7 @@ build_mbedtls() {
 		"-DMBEDTLS_FATAL_WARNINGS=OFF" \
 		"-DUSE_STATIC_MBEDTLS_LIBRARY=ON" \
 		"-DUSE_SHARED_MBEDTLS_LIBRARY=OFF" \
+		"-DMBEDTLS_CONFIG_SET=MBEDTLS_THREADING_C;MBEDTLS_THREADING_PTHREAD" \
 		"$@"
 	"$CMAKE" --build "$(native_path "$build")" --target install -- -j "$JOBS"
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "apiVersion": 2,
+  "apiVersion": 3,
   "description": "Frozen native ABI contract for qfli_git. Every collected artifact, native import, lock file and Dart binding must match this exact API version and export list. Bump apiVersion together with QG_API_VERSION in native/include/qfli_git.h and qgApiVersion in lib/src/bindings.dart whenever a symbol is added, removed or renamed.",
   "requiredExports": [
     "qg_api_version",
@@ -12,6 +12,7 @@
     "qg_repo_open",
     "qg_repo_free",
     "qg_clone",
+    "qg_clone_with_progress",
     "qg_fetch",
     "qg_push",
     "qg_add_all",

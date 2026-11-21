@@ -16,6 +16,7 @@
 #include "qfli_git.h"
 
 #include <stdio.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -25,6 +26,17 @@
 #define PATH_SIZE 1024
 
 static qg_error err;
+
+static unsigned int local_checkout_reports;
+
+static void local_clone_progress(int stage, uint32_t completed, uint32_t total,
+                                  uint64_t bytes, void *payload)
+{
+	unsigned int *reports = payload;
+	(void)bytes;
+	if (stage == 3 && total > 0 && completed == total)
+		(*reports)++;
+}
 
 static const char *AUTHOR_NAME = "Qfli Git Smoke";
 static const char *AUTHOR_EMAIL = "smoke@qfli.invalid";
@@ -452,7 +464,12 @@ static int test_local(const char *root)
 
 	printf("-- clone again and verify\n");
 
-	CHECK(qg_clone(remote, verify, NULL, NULL, NULL, &clone, &err));
+	CHECK(qg_clone_with_progress(remote, verify, NULL, NULL, NULL,
+	                            local_clone_progress, &local_checkout_reports, &clone, &err));
+	if (local_checkout_reports == 0) {
+		printf("FAIL clone did not report completed checkout\n");
+		goto done;
+	}
 
 	if (join_path(file, sizeof(file), verify, "file.txt") < 0 ||
 	    read_text(file) == NULL) {
@@ -746,30 +763,89 @@ done:
 	return status;
 }
 
+typedef struct {
+	pthread_mutex_t mutex;
+	pthread_cond_t condition;
+	int ready;
+	int start;
+} clone_start_gate;
+
+typedef struct {
+	clone_start_gate *gate;
+	const char *url;
+	char target[PATH_SIZE];
+	qg_error error;
+	int rc;
+	unsigned int reports;
+	unsigned int receiving_reports;
+} https_clone_worker;
+
+static void https_clone_progress(int stage, uint32_t completed, uint32_t total,
+                                  uint64_t bytes, void *payload)
+{
+	https_clone_worker *worker = payload;
+	(void)completed;
+	(void)total;
+	(void)bytes;
+	worker->reports++;
+	if (stage == 1)
+		worker->receiving_reports++;
+}
+
+static void *run_https_clone(void *payload)
+{
+	https_clone_worker *worker = payload;
+	qg_repo *repo = NULL;
+	pthread_mutex_lock(&worker->gate->mutex);
+	worker->gate->ready++;
+	pthread_cond_broadcast(&worker->gate->condition);
+	while (!worker->gate->start)
+		pthread_cond_wait(&worker->gate->condition, &worker->gate->mutex);
+	pthread_mutex_unlock(&worker->gate->mutex);
+	worker->rc = qg_clone_with_progress(worker->url, worker->target, NULL, NULL, NULL,
+	                                     https_clone_progress, worker, &repo, &worker->error);
+	qg_repo_free(repo);
+	return NULL;
+}
+
 static int test_https(const char *root, const char *url)
 {
-	char target[PATH_SIZE];
-	char oid[41];
-	qg_repo *repo = NULL;
-	int rc = 0;
+	clone_start_gate gate = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 0 };
+	https_clone_worker workers[2];
+	pthread_t threads[2];
+	int created = 0, i, rc = 0;
 
-	printf("-- anonymous https clone\n");
-
-	snprintf(target, sizeof(target), "%s/https", root);
-
-	rc = qg_clone(url, target, NULL, NULL, NULL, &repo, &err);
-	if (check(rc, "https clone") < 0)
-		return -1;
-
-	if (head_oid(repo, oid) < 0) {
-		qg_repo_free(repo);
-		return -1;
+	printf("-- two simultaneous anonymous https clones\n");
+	memset(workers, 0, sizeof(workers));
+	for (i = 0; i < 2; i++) {
+		workers[i].gate = &gate;
+		workers[i].url = url;
+		snprintf(workers[i].target, sizeof(workers[i].target), "%s/https-%d", root, i);
+		if (pthread_create(&threads[i], NULL, run_https_clone, &workers[i]) != 0) {
+			rc = -1;
+			break;
+		}
+		created++;
 	}
-
-	printf("ok   https head is %s\n", oid);
-	qg_repo_free(repo);
-
-	return 0;
+	pthread_mutex_lock(&gate.mutex);
+	while (gate.ready < created)
+		pthread_cond_wait(&gate.condition, &gate.mutex);
+	gate.start = 1;
+	pthread_cond_broadcast(&gate.condition);
+	pthread_mutex_unlock(&gate.mutex);
+	for (i = 0; i < created; i++) {
+		pthread_join(threads[i], NULL);
+		if (workers[i].rc != 0 || workers[i].receiving_reports == 0) {
+			printf("FAIL https clone %d rc=%d reports=%u: %s\n", i, workers[i].rc,
+			       workers[i].reports, workers[i].error.message);
+			rc = -1;
+		}
+	}
+	pthread_cond_destroy(&gate.condition);
+	pthread_mutex_destroy(&gate.mutex);
+	if (rc == 0)
+		printf("ok   both HTTPS clones completed with independent progress\n");
+	return rc;
 }
 
 int main(int argc, char **argv)

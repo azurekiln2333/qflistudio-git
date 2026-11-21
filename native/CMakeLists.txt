@@ -87,6 +87,23 @@ set(MBEDCRYPTO_LIBRARY
 	CACHE FILEPATH "" FORCE)
 set(MBEDTLS_FOUND TRUE CACHE BOOL "" FORCE)
 
+# libgit2 shares its TLS random generator across repository workers. The
+# installed headers must describe a mutex-enabled build of mbedTLS.
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES "${QFLI_GIT_MBEDTLS_INCLUDE}")
+unset(QFLI_GIT_MBEDTLS_THREAD_SAFE CACHE)
+check_c_source_compiles("
+#include <mbedtls/build_info.h>
+#if !defined(MBEDTLS_THREADING_C) || !defined(MBEDTLS_THREADING_PTHREAD)
+#error Concurrent Git TLS requires mbedTLS pthread locking
+#endif
+int main(void) { return 0; }
+" QFLI_GIT_MBEDTLS_THREAD_SAFE)
+unset(CMAKE_REQUIRED_INCLUDES)
+if(NOT QFLI_GIT_MBEDTLS_THREAD_SAFE)
+	message(FATAL_ERROR "Rebuild mbedTLS with THREADING_C and THREADING_PTHREAD")
+endif()
+
 if(NOT EXISTS "${QFLI_GIT_SRC_DIR}/libgit2/include/git2.h")
 	message(FATAL_ERROR "libgit2 sources are missing; run python tool/fetch_sources.py")
 endif()
@@ -110,6 +127,7 @@ set(USE_HTTP_PARSER builtin CACHE STRING "" FORCE)
 set(USE_GSSAPI OFF CACHE BOOL "" FORCE)
 set(USE_NTLMCLIENT OFF CACHE BOOL "" FORCE)
 set(USE_ICONV OFF CACHE BOOL "" FORCE)
+set(USE_THREADS ON CACHE BOOL "" FORCE)
 
 add_subdirectory("${QFLI_GIT_SRC_DIR}/libgit2" "${CMAKE_BINARY_DIR}/libgit2")
 
@@ -186,9 +204,10 @@ else()
 endif()
 
 if(QFLI_GIT_BUILD_SMOKE)
+	find_package(Threads REQUIRED)
 	add_executable(qfli_git_smoke test/smoke.c)
 	target_include_directories(qfli_git_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-	target_link_libraries(qfli_git_smoke PRIVATE qfli_git)
+	target_link_libraries(qfli_git_smoke PRIVATE qfli_git Threads::Threads)
 	set_target_properties(qfli_git_smoke PROPERTIES
 		RUNTIME_OUTPUT_DIRECTORY "${QFLI_GIT_OUTPUT_DIR}"
 		BUILD_WITH_INSTALL_RPATH TRUE

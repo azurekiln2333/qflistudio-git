@@ -279,6 +279,9 @@ typedef struct {
 	const char *token;
 	const int32_t *cancel_flag;
 	int attempts;
+	qg_clone_progress_cb progress;
+	void *progress_payload;
+	int progress_stage;
 } qg_callbacks;
 
 static void qg_callbacks_init(qg_callbacks *cb, const char *username, const char *token,
@@ -322,12 +325,49 @@ static int qg_transfer_progress_cb(const git_indexer_progress *stats, void *payl
 {
 	qg_callbacks *cb = (qg_callbacks *)payload;
 
-	(void)stats;
-
+	if (cb != NULL && qg_canceled(cb->cancel_flag))
+		return GIT_EUSER;
+	if (cb != NULL && cb->progress != NULL) {
+		if (cb->progress_stage < 2) {
+			cb->progress_stage = 1;
+			cb->progress(1, stats->received_objects, stats->total_objects,
+			             (uint64_t)stats->received_bytes, cb->progress_payload);
+		}
+		if (stats->received_objects == stats->total_objects && stats->total_deltas > 0) {
+			cb->progress_stage = 2;
+			cb->progress(2, stats->indexed_deltas, stats->total_deltas,
+			             (uint64_t)stats->received_bytes, cb->progress_payload);
+		}
+	}
 	if (cb != NULL && qg_canceled(cb->cancel_flag))
 		return GIT_EUSER;
 
 	return 0;
+}
+
+static void qg_checkout_progress_cb(const char *path, size_t completed, size_t total,
+                                     void *payload)
+{
+	qg_callbacks *cb = (qg_callbacks *)payload;
+	(void)path;
+	if (cb != NULL && cb->progress != NULL && !qg_canceled(cb->cancel_flag)) {
+		cb->progress(3, completed > UINT32_MAX ? UINT32_MAX : (uint32_t)completed,
+		             total > UINT32_MAX ? UINT32_MAX : (uint32_t)total,
+		             0, cb->progress_payload);
+	}
+}
+
+static int qg_checkout_notify_cb(git_checkout_notify_t why, const char *path,
+                                  const git_diff_file *baseline, const git_diff_file *target,
+                                  const git_diff_file *workdir, void *payload)
+{
+	qg_callbacks *cb = (qg_callbacks *)payload;
+	(void)why;
+	(void)path;
+	(void)baseline;
+	(void)target;
+	(void)workdir;
+	return cb != NULL && qg_canceled(cb->cancel_flag) ? GIT_EUSER : 0;
 }
 
 static int qg_push_transfer_progress_cb(unsigned int current, unsigned int total, size_t bytes,
@@ -474,6 +514,13 @@ void qg_repo_free(qg_repo *repo)
 int qg_clone(const char *url, const char *path, const char *username, const char *token,
              const int32_t *cancel_flag, qg_repo **out, qg_error *err)
 {
+	return qg_clone_with_progress(url, path, username, token, cancel_flag, NULL, NULL, out, err);
+}
+
+int qg_clone_with_progress(const char *url, const char *path, const char *username,
+             const char *token, const int32_t *cancel_flag, qg_clone_progress_cb progress,
+             void *payload, qg_repo **out, qg_error *err)
+{
 	git_clone_options options = GIT_CLONE_OPTIONS_INIT;
 	qg_callbacks cb;
 	git_repository *repository = NULL;
@@ -485,11 +532,22 @@ int qg_clone(const char *url, const char *path, const char *username, const char
 	*out = NULL;
 
 	qg_callbacks_init(&cb, username, token, cancel_flag);
+	cb.progress = progress;
+	cb.progress_payload = payload;
 	qg_install_callbacks(&options.fetch_opts.callbacks, &cb);
+	options.checkout_opts.progress_cb = qg_checkout_progress_cb;
+	options.checkout_opts.progress_payload = &cb;
+	options.checkout_opts.notify_flags = GIT_CHECKOUT_NOTIFY_ALL;
+	options.checkout_opts.notify_cb = qg_checkout_notify_cb;
+	options.checkout_opts.notify_payload = &cb;
 
 	rc = git_clone(&repository, url, path, &options);
 	if (rc < 0)
 		return qg_result(rc, cancel_flag, err);
+	if (qg_canceled(cancel_flag)) {
+		git_repository_free(repository);
+		return qg_result(GIT_EUSER, cancel_flag, err);
+	}
 
 	return qg_repo_wrap(repository, out, err);
 }
