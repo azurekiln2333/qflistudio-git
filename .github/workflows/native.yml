@@ -46,6 +46,10 @@ jobs:
       - name: Fetch pinned upstream sources
         run: python3 tool/fetch_sources.py
       - name: Build host library
+        # libgit2 probes stat members before its own Linux feature flags.
+        # Match the _GNU_SOURCE visibility used by the compiled library.
+        env:
+          CFLAGS: -D_GNU_SOURCE
         run: bash tool/build_native.sh --platform host --out native/build/ci/host
       - name: Check the host library against the native contract
         run: |
